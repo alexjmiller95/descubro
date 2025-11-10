@@ -114,44 +114,56 @@
       const artistsRaw = artistData?.response?.results || [];
       const connectionsRaw = connectionData?.response?.results || [];
 
-      // 🧩 Build unique artist map
-      const artistMap = new Map();
+      if (!connectionsRaw.length) {
+        console.error("❌ No connection data found.");
+        return;
+      }
 
-      artistsRaw.forEach(a => {
-        const id = a._id;
-        if (!id) return;
-        const genre = a.genre || a.genre_text || (Array.isArray(a.genres_list) ? a.genres_list[0] : "Other") || "Other";
-        artistMap.set(id, {
-          id,
-          name: a.name_text || "Unknown Artist",
-          genre
-        });
+      // 🎶 Build a map of artistName → genre(s)
+      const genreMap = new Map();
+      connectionsRaw.forEach(c => {
+        const g = c.genre || "Other";
+        if (c.artist_1) {
+          if (!genreMap.has(c.artist_1)) genreMap.set(c.artist_1, new Set());
+          genreMap.get(c.artist_1).add(g);
+        }
+        if (c.artist_2) {
+          if (!genreMap.has(c.artist_2)) genreMap.set(c.artist_2, new Set());
+          genreMap.get(c.artist_2).add(g);
+        }
       });
 
-      // 🔗 Build links (only for existing artists)
-      const links = [];
+      // 🧠 Unique list of artists (from both tables)
+      const artistNames = new Set();
+      artistsRaw.forEach(a => artistNames.add(a.name_text));
       connectionsRaw.forEach(c => {
-        const artist1 = typeof c.artist_1 === "object" ? c.artist_1._id : c.artist_1;
-        const artist2 = typeof c.artist_2 === "object" ? c.artist_2._id : c.artist_2;
+        artistNames.add(c.artist_1);
+        artistNames.add(c.artist_2);
+      });
 
-        if (!artistMap.has(artist1) || !artistMap.has(artist2)) return;
+      const nodes = Array.from(artistNames)
+        .filter(Boolean)
+        .map(name => ({
+          id: name,
+          name,
+          genre: Array.from(genreMap.get(name) || ["Other"])[0] // pick first genre
+        }));
 
-        links.push({
-          source: artist1,
-          target: artist2,
+      // 🔗 Build links
+      const links = connectionsRaw
+        .filter(c => c.artist_1 && c.artist_2)
+        .map(c => ({
+          source: c.artist_1,
+          target: c.artist_2,
           genre: c.genre || "Other",
           strength: c.connection_strength || 1
-        });
-      });
+        }));
 
-      // 🧠 Deduplicate artists (only ones in map)
-      const nodes = Array.from(artistMap.values());
-
-      // 🎨 Genre color mapping
+      // 🎨 Colors by genre
       const allGenres = Array.from(new Set(nodes.map(n => n.genre).concat(links.map(l => l.genre))));
       const color = d3.scaleOrdinal(d3.schemeTableau10).domain(allGenres);
 
-      console.log("🧩 Artists:", nodes.length, " Links:", links.length);
+      console.log("🧩 Artists:", nodes.length, "Links:", links.length);
 
       // 🧲 Force simulation
       const simulation = d3.forceSimulation(nodes)
@@ -160,7 +172,7 @@
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collision", d3.forceCollide(20));
 
-      // 🔗 Links
+      // 🔗 Draw links
       const link = svg.append("g")
         .attr("stroke-opacity", 0.5)
         .selectAll("line")
@@ -169,7 +181,7 @@
         .attr("stroke-width", d => Math.max(1, d.strength))
         .attr("stroke", d => color(d.genre));
 
-      // 🎵 Nodes
+      // 🎵 Draw nodes
       const node = svg.append("g")
         .selectAll("circle")
         .data(nodes)
@@ -205,7 +217,7 @@
         tooltip.transition().duration(200).style("opacity", 0);
       }
 
-      // 🧭 Simulation tick
+      // ⚙️ Tick update
       simulation.on("tick", () => {
         link
           .attr("x1", d => d.source.x)
@@ -222,7 +234,7 @@
           .attr("y", d => d.y + 3);
       });
 
-      // 🖱 Drag behavior
+      // 🖱 Dragging
       function drag(simulation) {
         function dragstarted(event, d) {
           if (!event.active) simulation.alphaTarget(0.3).restart();
