@@ -114,67 +114,62 @@
       const artistsRaw = artistData?.response?.results || [];
       const connectionsRaw = connectionData?.response?.results || [];
 
-      if (!connectionsRaw.length) {
-        console.error("❌ No connection data found.");
-        return;
-      }
+      console.log("🎧 Artists fetched:", artistsRaw.length);
+      console.log("🎵 Connections fetched:", connectionsRaw.length);
 
-      // 🎶 Build a map of artistName → genre(s)
-      const genreMap = new Map();
-      connectionsRaw.forEach(c => {
-        const g = c.genre || "Other";
-        if (c.artist_1) {
-          if (!genreMap.has(c.artist_1)) genreMap.set(c.artist_1, new Set());
-          genreMap.get(c.artist_1).add(g);
-        }
-        if (c.artist_2) {
-          if (!genreMap.has(c.artist_2)) genreMap.set(c.artist_2, new Set());
-          genreMap.get(c.artist_2).add(g);
-        }
-      });
+      // Normalize helper
+      const clean = str => str ? str.trim().toLowerCase() : "";
 
-      // 🧠 Unique list of artists (from both tables)
-      const artistNames = new Set();
-      artistsRaw.forEach(a => artistNames.add(a.name_text));
-      connectionsRaw.forEach(c => {
-        artistNames.add(c.artist_1);
-        artistNames.add(c.artist_2);
-      });
-
-      const nodes = Array.from(artistNames)
-        .filter(Boolean)
-        .map(name => ({
+      // Build artist map (from Artist table)
+      const artistMap = new Map();
+      artistsRaw.forEach(a => {
+        const name = clean(a.name_text);
+        if (!name) return;
+        artistMap.set(name, {
           id: name,
-          name,
-          genre: Array.from(genreMap.get(name) || ["Other"])[0] // pick first genre
-        }));
+          name: a.name_text.trim(),
+          genre: a.genre || a.genre_text || "Other"
+        });
+      });
 
-      // 🔗 Build links
+      // Add any artists found only in connections
+      connectionsRaw.forEach(c => {
+        const a1 = clean(c.artist_1);
+        const a2 = clean(c.artist_2);
+        if (a1 && !artistMap.has(a1))
+          artistMap.set(a1, { id: a1, name: c.artist_1.trim(), genre: c.genre || "Other" });
+        if (a2 && !artistMap.has(a2))
+          artistMap.set(a2, { id: a2, name: c.artist_2.trim(), genre: c.genre || "Other" });
+      });
+
+      // Build links (only if both artists exist)
       const links = connectionsRaw
         .filter(c => c.artist_1 && c.artist_2)
         .map(c => ({
-          source: c.artist_1,
-          target: c.artist_2,
+          source: clean(c.artist_1),
+          target: clean(c.artist_2),
           genre: c.genre || "Other",
           strength: c.connection_strength || 1
-        }));
+        }))
+        .filter(l => artistMap.has(l.source) && artistMap.has(l.target));
+
+      const nodes = Array.from(artistMap.values());
+      console.log("🧩 Final nodes:", nodes.length, "Links:", links.length);
 
       // 🎨 Colors by genre
       const allGenres = Array.from(new Set(nodes.map(n => n.genre).concat(links.map(l => l.genre))));
       const color = d3.scaleOrdinal(d3.schemeTableau10).domain(allGenres);
 
-      console.log("🧩 Artists:", nodes.length, "Links:", links.length);
-
       // 🧲 Force simulation
       const simulation = d3.forceSimulation(nodes)
         .force("link", d3.forceLink(links).id(d => d.id).distance(150))
-        .force("charge", d3.forceManyBody().strength(-250))
+        .force("charge", d3.forceManyBody().strength(-300))
         .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide(20));
+        .force("collision", d3.forceCollide(18));
 
       // 🔗 Draw links
       const link = svg.append("g")
-        .attr("stroke-opacity", 0.5)
+        .attr("stroke-opacity", 0.6)
         .selectAll("line")
         .data(links)
         .join("line")
@@ -217,7 +212,7 @@
         tooltip.transition().duration(200).style("opacity", 0);
       }
 
-      // ⚙️ Tick update
+      // ⚙️ Update positions
       simulation.on("tick", () => {
         link
           .attr("x1", d => d.source.x)
@@ -234,7 +229,7 @@
           .attr("y", d => d.y + 3);
       });
 
-      // 🖱 Dragging
+      // 🖱 Dragging behavior
       function drag(simulation) {
         function dragstarted(event, d) {
           if (!event.active) simulation.alphaTarget(0.3).restart();
