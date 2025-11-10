@@ -1,40 +1,48 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Descubro — Artist Mind Map</title>
-  <script src="https://d3js.org/d3.v7.min.js"></script>
-  <style>
-    body { margin: 0; overflow: hidden; background: #fafafa; }
-    text { font-family: sans-serif; font-size: 11px; pointer-events: none; fill: #333; }
-    circle { stroke: #fff; stroke-width: 1px; cursor: pointer; }
-    line { stroke-opacity: 0.6; }
-  </style>
-</head>
-<body>
 <script>
 console.log("✅ Script loaded — starting Descubro visualization...");
+
+// Capture any silent issues
+window.addEventListener("error", e => {
+  console.error("🚨 JS Error:", e.message, e.filename, e.lineno);
+});
+window.addEventListener("unhandledrejection", e => {
+  console.error("🚨 Promise Rejection:", e.reason);
+});
 
 const width = window.innerWidth;
 const height = window.innerHeight;
 
 const svg = d3.select("body").append("svg")
   .attr("width", width)
-  .attr("height", height);
+  .attr("height", height)
+  .style("background", "#fafafa");
 
-const artistAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
-const connectionAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
+// 👇 TEMP: add proxy to bypass CORS for testing
+const proxy = "https://cors-anywhere.herokuapp.com/";
+const artistAPI = proxy + "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
+const connectionAPI = proxy + "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
 
-console.log("🔍 Fetching from:", artistAPI, "and", connectionAPI);
+console.log("🔍 Testing API fetch...");
+console.log("🎯 Artist API:", artistAPI);
+console.log("🎯 Connection API:", connectionAPI);
 
+// Make sure fetch actually runs
 Promise.all([
-  fetch(artistAPI).then(res => res.json()),
-  fetch(connectionAPI).then(res => res.json())
+  fetch(artistAPI)
+    .then(res => {
+      console.log("🧠 Artist fetch response:", res.status, res.statusText);
+      return res.json();
+    }),
+  fetch(connectionAPI)
+    .then(res => {
+      console.log("🔗 Connection fetch response:", res.status, res.statusText);
+      return res.json();
+    })
 ])
 .then(([artistData, connectionData]) => {
-  console.log("🎨 Artists data received:", artistData);
-  console.log("🔗 Connections data received:", connectionData);
+  console.log("✅ API responses received!");
+  console.log("🎨 Artists data:", artistData);
+  console.log("🔗 Connections data:", connectionData);
 
   const artists = artistData?.response?.results || [];
   const connections = connectionData?.response?.results || [];
@@ -44,48 +52,34 @@ Promise.all([
     return;
   }
 
-  const color = d3.scaleOrdinal(d3.schemeSet2);
-
   const nodes = artists.map(a => ({
     id: a._id,
     name: a.name_text || "(no name)",
-    genre: a.genre || "Unknown",
-    image: a.image_url_text || null,
-    connectionIds: a.connections_list_custom_artistconnection || []
+    genre: a.genre || "Unknown"
   }));
 
-  let links = connections
-    .filter(c => c.artist_1 && c.artist_2)
-    .map(c => {
-      const source = c.artist_1?._id || c.artist_1;
-      const target = c.artist_2?._id || c.artist_2;
-      return {
-        source,
-        target,
-        genre: c.genre || "Other",
-        strength: c.connection_strength || 1
-      };
-    });
+  const color = d3.scaleOrdinal(d3.schemeSet2);
 
-  nodes.forEach(a => {
-    if (Array.isArray(a.connectionIds)) {
-      a.connectionIds.forEach(connId => {
-        const conn = connections.find(c => c._id === connId);
-        if (conn && conn.artist_1 && conn.artist_2) {
-          links.push({
-            source: typeof conn.artist_1 === "object" ? conn.artist_1._id : conn.artist_1,
-            target: typeof conn.artist_2 === "object" ? conn.artist_2._id : conn.artist_2,
-            genre: conn.genre || "Other",
-            strength: conn.connection_strength || 1
-          });
-        }
-      });
-    }
-  });
+  const node = svg.selectAll("circle")
+    .data(nodes)
+    .join("circle")
+    .attr("cx", (_, i) => 50 + i * 25)
+    .attr("cy", height / 2)
+    .attr("r", 8)
+    .attr("fill", (_, i) => color(i));
 
-  links = Array.from(new Map(links.map(l => [l.source + "-" + l.target, l])).values());
+  svg.selectAll("text")
+    .data(nodes)
+    .join("text")
+    .attr("x", (_, i) => 50 + i * 25)
+    .attr("y", height / 2 + 25)
+    .text(d => d.name)
+    .attr("font-size", "10px")
+    .attr("text-anchor", "middle");
 
-  console.log(`🧩 Final graph: ${nodes.length} nodes, ${links.length} links`);
-
-  const simulation = d3.forceSimulation(nodes)
-    .force("link", d3
+  console.log(`🧩 Rendered ${nodes.length} artists on screen`);
+})
+.catch(err => {
+  console.error("🚨 Fetch or visualization error:", err);
+});
+</script>
