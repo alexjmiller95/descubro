@@ -1,198 +1,291 @@
-<script>
-console.log("✅ Script loaded — starting Descubro visualization...");
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Descubro — Artist Mind Map</title>
 
-const width = window.innerWidth;
-const height = window.innerHeight;
-const svg = d3.select("body").append("svg")
-  .attr("width", width)
-  .attr("height", height);
+  <!-- ✅ Load D3 before visualization -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
 
-const artistAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
-const connectionAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #121212;
+      color: #fff;
+      font-family: 'Poppins', sans-serif;
+    }
 
-Promise.all([
-  fetch(artistAPI).then(res => res.json()),
-  fetch(connectionAPI).then(res => res.json())
-])
-.then(([artistData, connectionData]) => {
-  document.getElementById("loader").style.display = "none";
+    text {
+      font-size: 11px;
+      fill: #ddd;
+      pointer-events: none;
+    }
 
-  const artists = artistData?.response?.results || [];
-  const connections = connectionData?.response?.results || [];
+    circle {
+      stroke: #121212;
+      stroke-width: 1px;
+      cursor: pointer;
+      transition: transform 0.2s ease;
+    }
 
-  if (!artists.length) {
-    console.warn("⚠️ No artist data found.");
-    return;
-  }
+    circle:hover {
+      transform: scale(1.3);
+    }
 
-  // 🎨 Genre color mapping
-  const genres = Array.from(new Set(artists.map(a => a.genre || "Other")));
-  const color = d3.scaleOrdinal(d3.schemeSet2).domain(genres);
+    line {
+      stroke-opacity: 0.5;
+    }
 
-  // 🧩 Nodes
-  const nodes = artists.map(a => ({
-    id: a._id,
-    name: a.name_text || "(no name)",
-    image: a.image_url_text || null,
-    genre: a.genre || "Unknown",
-    connections: a.connections_list_custom_artistconnection || []
-  }));
+    #loader {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 18px;
+      color: #ff7a00;
+      text-align: center;
+    }
 
-  // 🔗 Links
-  let links = connections
-    .filter(c => c.artist_1 && c.artist_2)
-    .map(c => ({
-      source: typeof c.artist_1 === "object" ? c.artist_1._id : c.artist_1,
-      target: typeof c.artist_2 === "object" ? c.artist_2._id : c.artist_2,
-      genre: c.genre || "Other",
-      strength: c.connection_strength || 1
-    }))
-    .filter(link =>
-      nodes.some(n => n.id === link.source) &&
-      nodes.some(n => n.id === link.target)
-    );
+    #loader::after {
+      content: "";
+      display: block;
+      width: 40px;
+      height: 40px;
+      margin: 12px auto;
+      border-radius: 50%;
+      border: 5px solid #ff7a00;
+      border-color: #ff7a00 transparent #ff7a00 transparent;
+      animation: spin 1.2s linear infinite;
+    }
 
-  // Add inferred links from artists' own connection list
-  nodes.forEach(a => {
-    a.connections.forEach(cid => {
-      if (nodes.some(n => n.id === cid)) {
-        links.push({
-          source: a.id,
-          target: cid,
-          genre: a.genre,
-          strength: 1
-        });
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .tooltip {
+      position: absolute;
+      background: #1f1f1f;
+      padding: 6px 8px;
+      border: 1px solid #333;
+      border-radius: 4px;
+      pointer-events: none;
+      opacity: 0;
+      font-size: 12px;
+      color: #fff;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      transition: opacity 0.3s ease;
+    }
+
+    .legend text {
+      fill: #ccc;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="loader">Loading artist network...</div>
+
+  <script>
+    console.log("✅ Script loaded — starting Descubro visualization...");
+
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const svg = d3.select("body").append("svg")
+      .attr("width", width)
+      .attr("height", height);
+
+    const artistAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
+    const connectionAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
+
+    Promise.all([
+      fetch(artistAPI).then(res => res.json()),
+      fetch(connectionAPI).then(res => res.json())
+    ])
+    .then(([artistData, connectionData]) => {
+      document.getElementById("loader").style.display = "none";
+
+      const artists = artistData?.response?.results || [];
+      const connections = connectionData?.response?.results || [];
+
+      if (!artists.length) {
+        console.warn("⚠️ No artist data found.");
+        return;
       }
+
+      // 🎨 Genre color mapping
+      const genres = Array.from(new Set(artists.map(a => a.genre || "Other")));
+      const color = d3.scaleOrdinal(d3.schemeTableau10).domain(genres);
+
+      // 🧩 Nodes
+      const nodes = artists.map(a => ({
+        id: a._id,
+        name: a.name_text || "(no name)",
+        image: a.image_url_text || null,
+        genre: a.genre || "Unknown",
+        connections: a.connections_list_custom_artistconnection || []
+      }));
+
+      // 🔗 Links
+      let links = connections
+        .filter(c => c.artist_1 && c.artist_2)
+        .map(c => ({
+          source: typeof c.artist_1 === "object" ? c.artist_1._id : c.artist_1,
+          target: typeof c.artist_2 === "object" ? c.artist_2._id : c.artist_2,
+          genre: c.genre || "Other",
+          strength: c.connection_strength || 1
+        }))
+        .filter(link =>
+          nodes.some(n => n.id === link.source) &&
+          nodes.some(n => n.id === link.target)
+        );
+
+      // Add inferred links
+      nodes.forEach(a => {
+        a.connections.forEach(cid => {
+          if (nodes.some(n => n.id === cid)) {
+            links.push({
+              source: a.id,
+              target: cid,
+              genre: a.genre,
+              strength: 1
+            });
+          }
+        });
+      });
+
+      // Remove duplicates
+      links = Array.from(new Map(links.map(l => [l.source + "-" + l.target, l])).values());
+
+      console.log("🧩 Nodes:", nodes.length, " Links:", links.length);
+
+      // ⚙️ Genre centers (arranged in a circle)
+      const genreCenters = {};
+      const radius = Math.min(width, height) / 2.5;
+      genres.forEach((g, i) => {
+        const angle = (i / genres.length) * 2 * Math.PI;
+        genreCenters[g] = {
+          x: width / 2 + radius * Math.cos(angle),
+          y: height / 2 + radius * Math.sin(angle)
+        };
+      });
+
+      // 🧠 Force simulation
+      const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(120))
+        .force("charge", d3.forceManyBody().strength(-180))
+        .force("x", d3.forceX(d => genreCenters[d.genre]?.x || width / 2).strength(0.07))
+        .force("y", d3.forceY(d => genreCenters[d.genre]?.y || height / 2).strength(0.07))
+        .force("collision", d3.forceCollide(15))
+        .force("center", d3.forceCenter(width / 2, height / 2));
+
+      // Draw links
+      const link = svg.append("g")
+        .attr("stroke", "#888")
+        .attr("stroke-opacity", 0.5)
+        .selectAll("line")
+        .data(links)
+        .join("line")
+        .attr("stroke-width", d => Math.max(1, d.strength * 2));
+
+      // Draw nodes
+      const node = svg.append("g")
+        .selectAll("circle")
+        .data(nodes)
+        .join("circle")
+        .attr("r", 8)
+        .attr("fill", d => color(d.genre))
+        .call(drag(simulation))
+        .on("mouseover", (event, d) => showTooltip(event, d))
+        .on("mouseout", hideTooltip);
+
+      // Labels
+      const label = svg.append("g")
+        .selectAll("text")
+        .data(nodes)
+        .join("text")
+        .text(d => d.name)
+        .attr("font-size", 10)
+        .attr("x", 8)
+        .attr("y", 4);
+
+      // Tooltip
+      const tooltip = d3.select("body").append("div")
+        .attr("class", "tooltip");
+
+      function showTooltip(event, d) {
+        tooltip.transition().duration(200).style("opacity", 1);
+        tooltip.html(`<strong>${d.name}</strong><br>${d.genre}`)
+          .style("left", (event.pageX + 10) + "px")
+          .style("top", (event.pageY - 20) + "px");
+      }
+
+      function hideTooltip() {
+        tooltip.transition().duration(200).style("opacity", 0);
+      }
+
+      simulation.on("tick", () => {
+        link
+          .attr("x1", d => d.source.x)
+          .attr("y1", d => d.source.y)
+          .attr("x2", d => d.target.x)
+          .attr("y2", d => d.target.y);
+
+        node
+          .attr("cx", d => d.x)
+          .attr("cy", d => d.y);
+
+        label
+          .attr("x", d => d.x + 10)
+          .attr("y", d => d.y + 3);
+      });
+
+      function drag(simulation) {
+        function dragstarted(event, d) {
+          if (!event.active) simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        }
+        function dragged(event, d) {
+          d.fx = event.x;
+          d.fy = event.y;
+        }
+        function dragended(event, d) {
+          if (!event.active) simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+        }
+        return d3.drag()
+          .on("start", dragstarted)
+          .on("drag", dragged)
+          .on("end", dragended);
+      }
+
+      // 🧾 Legend
+      const legend = svg.append("g")
+        .attr("class", "legend")
+        .attr("transform", "translate(20, 20)");
+
+      genres.forEach((g, i) => {
+        const y = i * 20;
+        legend.append("circle")
+          .attr("cx", 0)
+          .attr("cy", y)
+          .attr("r", 6)
+          .attr("fill", color(g));
+        legend.append("text")
+          .attr("x", 12)
+          .attr("y", y + 4)
+          .text(g)
+          .attr("font-size", 12);
+      });
+    })
+    .catch(err => {
+      document.getElementById("loader").textContent = "⚠️ Failed to load data.";
+      console.error("🚨 Fetch or visualization error:", err);
     });
-  });
-
-  // Remove duplicates
-  links = Array.from(new Map(links.map(l => [l.source + "-" + l.target, l])).values());
-
-  console.log("🧩 Nodes:", nodes.length, " Links:", links.length);
-
-  // ⚙️ Genre centers (spread around circle)
-  const genreCenters = {};
-  const radius = Math.min(width, height) / 2.5;
-  genres.forEach((g, i) => {
-    const angle = (i / genres.length) * 2 * Math.PI;
-    genreCenters[g] = {
-      x: width / 2 + radius * Math.cos(angle),
-      y: height / 2 + radius * Math.sin(angle)
-    };
-  });
-
-  // 🧠 Force simulation
-  const simulation = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id(d => d.id).distance(120))
-    .force("charge", d3.forceManyBody().strength(-180))
-    .force("x", d3.forceX(d => genreCenters[d.genre]?.x || width / 2).strength(0.05))
-    .force("y", d3.forceY(d => genreCenters[d.genre]?.y || height / 2).strength(0.05))
-    .force("collision", d3.forceCollide(15))
-    .force("center", d3.forceCenter(width / 2, height / 2));
-
-  // Draw links
-  const link = svg.append("g")
-    .attr("stroke", "#aaa")
-    .attr("stroke-opacity", 0.6)
-    .selectAll("line")
-    .data(links)
-    .join("line")
-    .attr("stroke-width", d => Math.max(1, d.strength * 2));
-
-  // Draw nodes
-  const node = svg.append("g")
-    .selectAll("circle")
-    .data(nodes)
-    .join("circle")
-    .attr("r", 8)
-    .attr("fill", d => color(d.genre))
-    .call(drag(simulation))
-    .on("mouseover", (event, d) => showTooltip(event, d))
-    .on("mouseout", hideTooltip);
-
-  // Labels
-  const label = svg.append("g")
-    .selectAll("text")
-    .data(nodes)
-    .join("text")
-    .text(d => d.name)
-    .attr("font-size", 10)
-    .attr("x", 8)
-    .attr("y", 4);
-
-  // Tooltip
-  const tooltip = d3.select("body").append("div")
-    .attr("class", "tooltip");
-
-  function showTooltip(event, d) {
-    tooltip.transition().duration(200).style("opacity", 1);
-    tooltip.html(`<strong>${d.name}</strong><br>${d.genre}`)
-      .style("left", (event.pageX + 10) + "px")
-      .style("top", (event.pageY - 20) + "px");
-  }
-
-  function hideTooltip() {
-    tooltip.transition().duration(200).style("opacity", 0);
-  }
-
-  simulation.on("tick", () => {
-    link
-      .attr("x1", d => d.source.x)
-      .attr("y1", d => d.source.y)
-      .attr("x2", d => d.target.x)
-      .attr("y2", d => d.target.y);
-
-    node
-      .attr("cx", d => d.x)
-      .attr("cy", d => d.y);
-
-    label
-      .attr("x", d => d.x + 10)
-      .attr("y", d => d.y + 3);
-  });
-
-  function drag(simulation) {
-    function dragstarted(event, d) {
-      if (!event.active) simulation.alphaTarget(0.3).restart();
-      d.fx = d.x;
-      d.fy = d.y;
-    }
-    function dragged(event, d) {
-      d.fx = event.x;
-      d.fy = event.y;
-    }
-    function dragended(event, d) {
-      if (!event.active) simulation.alphaTarget(0);
-      d.fx = null;
-      d.fy = null;
-    }
-    return d3.drag()
-      .on("start", dragstarted)
-      .on("drag", dragged)
-      .on("end", dragended);
-  }
-
-  // 🧾 Add legend
-  const legend = svg.append("g")
-    .attr("transform", "translate(20, 20)");
-
-  genres.forEach((g, i) => {
-    const y = i * 20;
-    legend.append("circle")
-      .attr("cx", 0)
-      .attr("cy", y)
-      .attr("r", 6)
-      .attr("fill", color(g));
-    legend.append("text")
-      .attr("x", 12)
-      .attr("y", y + 4)
-      .text(g)
-      .attr("font-size", 12);
-  });
-})
-.catch(err => {
-  document.getElementById("loader").textContent = "⚠️ Failed to load data.";
-  console.error("🚨 Fetch or visualization error:", err);
-});
-</script>
+  </script>
+</body>
+</html>
