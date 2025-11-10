@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Descubro — Artist Network</title>
 
-  <!-- ✅ Load Afacad font -->
+  <!-- Afacad font -->
   <link href="https://fonts.googleapis.com/css2?family=Afacad:wght@400;600&display=swap" rel="stylesheet">
 
-  <!-- ✅ Load D3 -->
+  <!-- D3.js -->
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
@@ -101,11 +101,9 @@
       .attr("width", width)
       .attr("height", height);
 
-    // 🎯 Bubble API endpoints
     const artistAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
     const connectionAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
 
-    // 🧠 Fetch both
     Promise.all([
       fetch(artistAPI).then(res => res.json()),
       fetch(connectionAPI).then(res => res.json())
@@ -113,59 +111,65 @@
     .then(([artistData, connectionData]) => {
       document.getElementById("loader").style.display = "none";
 
-      const artists = artistData?.response?.results || [];
-      const connections = connectionData?.response?.results || [];
+      const artistsRaw = artistData?.response?.results || [];
+      const connectionsRaw = connectionData?.response?.results || [];
 
-      if (!artists.length || !connections.length) {
-        console.warn("⚠️ Missing artist or connection data");
-        return;
-      }
+      // 🧩 Build unique artist map
+      const artistMap = new Map();
 
-      // 🎨 Genre colors
-      const allGenres = Array.from(new Set(connections.map(c => c.genre || "Other")));
-      const color = d3.scaleOrdinal(d3.schemeTableau10).domain(allGenres);
+      artistsRaw.forEach(a => {
+        const id = a._id;
+        if (!id) return;
+        const genre = a.genre || a.genre_text || (Array.isArray(a.genres_list) ? a.genres_list[0] : "Other") || "Other";
+        artistMap.set(id, {
+          id,
+          name: a.name_text || "Unknown Artist",
+          genre
+        });
+      });
 
-      // 🧩 Nodes
-      const nodes = artists.map(a => ({
-        id: a._id,
-        name: a.name_text || "(no name)",
-        genre: a.genre || "Unknown"
-      }));
+      // 🔗 Build links (only for existing artists)
+      const links = [];
+      connectionsRaw.forEach(c => {
+        const artist1 = typeof c.artist_1 === "object" ? c.artist_1._id : c.artist_1;
+        const artist2 = typeof c.artist_2 === "object" ? c.artist_2._id : c.artist_2;
 
-      // 🕸 Links from your Bubble connection table
-      const links = connections
-        .filter(c => c.artist_1 && c.artist_2)
-        .map(c => ({
-          source: typeof c.artist_1 === "object" ? c.artist_1._id : c.artist_1,
-          target: typeof c.artist_2 === "object" ? c.artist_2._id : c.artist_2,
+        if (!artistMap.has(artist1) || !artistMap.has(artist2)) return;
+
+        links.push({
+          source: artist1,
+          target: artist2,
           genre: c.genre || "Other",
           strength: c.connection_strength || 1
-        }))
-        .filter(link =>
-          nodes.some(n => n.id === link.source) &&
-          nodes.some(n => n.id === link.target)
-        );
+        });
+      });
 
-      console.log("🎶 Artists:", nodes.length, " Links:", links.length);
+      // 🧠 Deduplicate artists (only ones in map)
+      const nodes = Array.from(artistMap.values());
 
-      // 🧲 Simulation
+      // 🎨 Genre color mapping
+      const allGenres = Array.from(new Set(nodes.map(n => n.genre).concat(links.map(l => l.genre))));
+      const color = d3.scaleOrdinal(d3.schemeTableau10).domain(allGenres);
+
+      console.log("🧩 Artists:", nodes.length, " Links:", links.length);
+
+      // 🧲 Force simulation
       const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(120))
-        .force("charge", d3.forceManyBody().strength(-200))
+        .force("link", d3.forceLink(links).id(d => d.id).distance(150))
+        .force("charge", d3.forceManyBody().strength(-250))
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collision", d3.forceCollide(20));
 
-      // 🔗 Draw links
+      // 🔗 Links
       const link = svg.append("g")
-        .attr("stroke", "#888")
         .attr("stroke-opacity", 0.5)
         .selectAll("line")
         .data(links)
         .join("line")
-        .attr("stroke-width", d => Math.max(1, d.strength * 0.8))
+        .attr("stroke-width", d => Math.max(1, d.strength))
         .attr("stroke", d => color(d.genre));
 
-      // 🎵 Draw nodes
+      // 🎵 Nodes
       const node = svg.append("g")
         .selectAll("circle")
         .data(nodes)
@@ -186,7 +190,7 @@
         .attr("x", 10)
         .attr("y", 3);
 
-      // 🧾 Tooltip
+      // 💬 Tooltip
       const tooltip = d3.select("body").append("div")
         .attr("class", "tooltip");
 
@@ -201,7 +205,7 @@
         tooltip.transition().duration(200).style("opacity", 0);
       }
 
-      // ⚙️ Simulation tick
+      // 🧭 Simulation tick
       simulation.on("tick", () => {
         link
           .attr("x1", d => d.source.x)
@@ -218,7 +222,7 @@
           .attr("y", d => d.y + 3);
       });
 
-      // 🖱 Dragging
+      // 🖱 Drag behavior
       function drag(simulation) {
         function dragstarted(event, d) {
           if (!event.active) simulation.alphaTarget(0.3).restart();
