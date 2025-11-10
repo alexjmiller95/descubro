@@ -119,17 +119,24 @@
           target: typeof c.artist_2 === "object" ? c.artist_2._id : c.artist_2,
           genre: c.genre || "Other",
           strength: c.connection_strength || 1
-        }));
+        }))
+        // 🧹 Filter out invalid references
+        .filter(link =>
+          nodes.some(n => n.id === link.source) &&
+          nodes.some(n => n.id === link.target)
+        );
 
       // Add inferred links
       nodes.forEach(a => {
         a.connections.forEach(cid => {
-          links.push({
-            source: a.id,
-            target: cid,
-            genre: a.genre,
-            strength: 1
-          });
+          if (nodes.some(n => n.id === cid)) {
+            links.push({
+              source: a.id,
+              target: cid,
+              genre: a.genre,
+              strength: 1
+            });
+          }
         });
       });
 
@@ -140,8 +147,8 @@
 
       // 🧠 Force simulation
       const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(100))
-        .force("charge", d3.forceManyBody().strength(-200))
+        .force("link", d3.forceLink(links).id(d => d.id).distance(120))
+        .force("charge", d3.forceManyBody().strength(-180))
         .force("center", d3.forceCenter(width / 2, height / 2));
 
       // Draw links
