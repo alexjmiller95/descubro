@@ -1,85 +1,159 @@
-<script>
-console.log("✅ Script loaded — starting Descubro visualization...");
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Descubro — Artist Mind Map</title>
 
-// Capture any silent issues
-window.addEventListener("error", e => {
-  console.error("🚨 JS Error:", e.message, e.filename, e.lineno);
-});
-window.addEventListener("unhandledrejection", e => {
-  console.error("🚨 Promise Rejection:", e.reason);
-});
+  <!-- ✅ Load D3 first -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
 
-const width = window.innerWidth;
-const height = window.innerHeight;
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: linear-gradient(135deg, #fafafa 0%, #ffe6cc 100%);
+      font-family: 'Poppins', sans-serif;
+    }
+    text {
+      font-size: 11px;
+      fill: #333;
+      pointer-events: none;
+    }
+    circle {
+      stroke: #fff;
+      stroke-width: 1px;
+      cursor: pointer;
+      transition: transform 0.2s ease;
+    }
+    circle:hover {
+      transform: scale(1.3);
+    }
+    line {
+      stroke-opacity: 0.6;
+    }
+    #loader {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 18px;
+      color: #555;
+      text-align: center;
+    }
+    #loader::after {
+      content: " ";
+      display: block;
+      width: 40px;
+      height: 40px;
+      margin: 12px auto;
+      border-radius: 50%;
+      border: 5px solid #ff7a00;
+      border-color: #ff7a00 transparent #ff7a00 transparent;
+      animation: spin 1.2s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .tooltip {
+      position: absolute;
+      background: #fff;
+      padding: 6px 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      pointer-events: none;
+      opacity: 0;
+      font-size: 12px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+      transition: opacity 0.3s ease;
+    }
+  </style>
+</head>
+<body>
+  <div id="loader">Loading artist network...</div>
 
-const svg = d3.select("body").append("svg")
-  .attr("width", width)
-  .attr("height", height)
-  .style("background", "#fafafa");
+  <!-- ✅ Main script goes AFTER D3 -->
+  <script>
+    console.log("✅ Script loaded — starting Descubro visualization...");
 
-// 👇 TEMP: add proxy to bypass CORS for testing
-const proxy = "https://cors-anywhere.herokuapp.com/";
-const artistAPI = proxy + "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
-const connectionAPI = proxy + "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
+    window.addEventListener("error", e => {
+      console.error("🚨 JS Error:", e.message, e.filename, e.lineno);
+    });
+    window.addEventListener("unhandledrejection", e => {
+      console.error("🚨 Promise Rejection:", e.reason);
+    });
 
-console.log("🔍 Testing API fetch...");
-console.log("🎯 Artist API:", artistAPI);
-console.log("🎯 Connection API:", connectionAPI);
+    const width = window.innerWidth;
+    const height = window.innerHeight;
 
-// Make sure fetch actually runs
-Promise.all([
-  fetch(artistAPI)
-    .then(res => {
-      console.log("🧠 Artist fetch response:", res.status, res.statusText);
-      return res.json();
-    }),
-  fetch(connectionAPI)
-    .then(res => {
-      console.log("🔗 Connection fetch response:", res.status, res.statusText);
-      return res.json();
+    const svg = d3.select("body").append("svg")
+      .attr("width", width)
+      .attr("height", height)
+      .style("background", "#fafafa");
+
+    // ✅ Temporary proxy for CORS testing
+    const proxy = "https://cors-anywhere.herokuapp.com/";
+    const artistAPI = proxy + "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
+    const connectionAPI = proxy + "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
+
+    console.log("🎯 Testing fetch:", artistAPI, connectionAPI);
+
+    Promise.all([
+      fetch(artistAPI).then(res => {
+        console.log("🧠 Artist fetch status:", res.status);
+        return res.json();
+      }),
+      fetch(connectionAPI).then(res => {
+        console.log("🔗 Connection fetch status:", res.status);
+        return res.json();
+      })
+    ])
+    .then(([artistData, connectionData]) => {
+      document.getElementById("loader").style.display = "none";
+
+      console.log("🎨 Artists data received:", artistData);
+      console.log("🔗 Connections data received:", connectionData);
+
+      const artists = artistData?.response?.results || [];
+      const connections = connectionData?.response?.results || [];
+
+      if (!artists.length) {
+        console.warn("⚠️ No artist data found.");
+        return;
+      }
+
+      const color = d3.scaleOrdinal(d3.schemeSet2);
+
+      const nodes = artists.map(a => ({
+        id: a._id,
+        name: a.name_text || "(no name)",
+        genre: a.genre || "Unknown"
+      }));
+
+      const node = svg.selectAll("circle")
+        .data(nodes)
+        .join("circle")
+        .attr("cx", (_, i) => 60 + i * 25)
+        .attr("cy", height / 2)
+        .attr("r", 8)
+        .attr("fill", (_, i) => color(i));
+
+      svg.selectAll("text")
+        .data(nodes)
+        .join("text")
+        .attr("x", (_, i) => 60 + i * 25)
+        .attr("y", height / 2 + 25)
+        .text(d => d.name)
+        .attr("font-size", "10px")
+        .attr("text-anchor", "middle");
+
+      console.log(`🧩 Rendered ${nodes.length} artists`);
     })
-])
-.then(([artistData, connectionData]) => {
-  console.log("✅ API responses received!");
-  console.log("🎨 Artists data:", artistData);
-  console.log("🔗 Connections data:", connectionData);
-
-  const artists = artistData?.response?.results || [];
-  const connections = connectionData?.response?.results || [];
-
-  if (!artists.length) {
-    console.warn("⚠️ No artist data found.");
-    return;
-  }
-
-  const nodes = artists.map(a => ({
-    id: a._id,
-    name: a.name_text || "(no name)",
-    genre: a.genre || "Unknown"
-  }));
-
-  const color = d3.scaleOrdinal(d3.schemeSet2);
-
-  const node = svg.selectAll("circle")
-    .data(nodes)
-    .join("circle")
-    .attr("cx", (_, i) => 50 + i * 25)
-    .attr("cy", height / 2)
-    .attr("r", 8)
-    .attr("fill", (_, i) => color(i));
-
-  svg.selectAll("text")
-    .data(nodes)
-    .join("text")
-    .attr("x", (_, i) => 50 + i * 25)
-    .attr("y", height / 2 + 25)
-    .text(d => d.name)
-    .attr("font-size", "10px")
-    .attr("text-anchor", "middle");
-
-  console.log(`🧩 Rendered ${nodes.length} artists on screen`);
-})
-.catch(err => {
-  console.error("🚨 Fetch or visualization error:", err);
-});
-</script>
+    .catch(err => {
+      document.getElementById("loader").textContent = "⚠️ Failed to load data.";
+      console.error("🚨 Fetch or visualization error:", err);
+    });
+  </script>
+</body>
+</html>
