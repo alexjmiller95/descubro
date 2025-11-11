@@ -117,10 +117,9 @@
       console.log("🎧 Artists fetched:", artistsRaw.length);
       console.log("🎵 Connections fetched:", connectionsRaw.length);
 
-      // Normalize helper
       const clean = str => str ? str.trim().toLowerCase() : "";
 
-      // Build artist map (from Artist table)
+      // Build artist map
       const artistMap = new Map();
       artistsRaw.forEach(a => {
         const name = clean(a.name_text);
@@ -132,7 +131,7 @@
         });
       });
 
-      // Add any artists found only in connections
+      // Add artists from connections if missing
       connectionsRaw.forEach(c => {
         const a1 = clean(c.artist_1);
         const a2 = clean(c.artist_2);
@@ -142,32 +141,44 @@
           artistMap.set(a2, { id: a2, name: c.artist_2.trim(), genre: c.genre || "Other" });
       });
 
-      // Build links (only if both artists exist)
+      // Build links (using lowercase names to ensure match)
       const links = connectionsRaw
-        .filter(c => c.artist_1 && c.artist_2)
         .map(c => ({
           source: clean(c.artist_1),
           target: clean(c.artist_2),
           genre: c.genre || "Other",
           strength: c.connection_strength || 1
         }))
-        .filter(l => artistMap.has(l.source) && artistMap.has(l.target));
+        .filter(l => l.source && l.target && artistMap.has(l.source) && artistMap.has(l.target));
 
       const nodes = Array.from(artistMap.values());
       console.log("🧩 Final nodes:", nodes.length, "Links:", links.length);
 
-      // 🎨 Colors by genre
+      // Color by genre
       const allGenres = Array.from(new Set(nodes.map(n => n.genre).concat(links.map(l => l.genre))));
       const color = d3.scaleOrdinal(d3.schemeTableau10).domain(allGenres);
 
-      // 🧲 Force simulation
-      const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(150))
-        .force("charge", d3.forceManyBody().strength(-300))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide(18));
+      // 🧲 Cluster artists by genre
+      const genreCenters = {};
+      const clusterRadius = 200;
+      const angleStep = (2 * Math.PI) / allGenres.length;
+      allGenres.forEach((g, i) => {
+        genreCenters[g] = {
+          x: width / 2 + clusterRadius * Math.cos(i * angleStep),
+          y: height / 2 + clusterRadius * Math.sin(i * angleStep)
+        };
+      });
 
-      // 🔗 Draw links
+      // D3 Force layout
+      const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+        .force("charge", d3.forceManyBody().strength(-200))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide(18))
+        .force("genreCluster", d3.forceX(d => genreCenters[d.genre]?.x || width/2).strength(0.05))
+        .force("genreClusterY", d3.forceY(d => genreCenters[d.genre]?.y || height/2).strength(0.05));
+
+      // Draw links
       const link = svg.append("g")
         .attr("stroke-opacity", 0.6)
         .selectAll("line")
@@ -176,7 +187,7 @@
         .attr("stroke-width", d => Math.max(1, d.strength))
         .attr("stroke", d => color(d.genre));
 
-      // 🎵 Draw nodes
+      // Draw nodes
       const node = svg.append("g")
         .selectAll("circle")
         .data(nodes)
@@ -187,7 +198,7 @@
         .on("mouseover", (event, d) => showTooltip(event, d))
         .on("mouseout", hideTooltip);
 
-      // 🏷 Labels
+      // Labels
       const label = svg.append("g")
         .selectAll("text")
         .data(nodes)
@@ -197,22 +208,19 @@
         .attr("x", 10)
         .attr("y", 3);
 
-      // 💬 Tooltip
-      const tooltip = d3.select("body").append("div")
-        .attr("class", "tooltip");
-
+      // Tooltip
+      const tooltip = d3.select("body").append("div").attr("class", "tooltip");
       function showTooltip(event, d) {
         tooltip.transition().duration(200).style("opacity", 1);
         tooltip.html(`<strong>${d.name}</strong><br>Genre: ${d.genre}`)
           .style("left", (event.pageX + 10) + "px")
           .style("top", (event.pageY - 20) + "px");
       }
-
       function hideTooltip() {
         tooltip.transition().duration(200).style("opacity", 0);
       }
 
-      // ⚙️ Update positions
+      // Update positions
       simulation.on("tick", () => {
         link
           .attr("x1", d => d.source.x)
@@ -229,7 +237,7 @@
           .attr("y", d => d.y + 3);
       });
 
-      // 🖱 Dragging behavior
+      // Drag behavior
       function drag(simulation) {
         function dragstarted(event, d) {
           if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -251,7 +259,7 @@
           .on("end", dragended);
       }
 
-      // 🎨 Legend
+      // Legend
       const legend = svg.append("g")
         .attr("class", "legend")
         .attr("transform", "translate(20, 20)");
@@ -268,6 +276,10 @@
           .attr("y", y + 4)
           .text(g);
       });
+
+      if (links.length === 0) {
+        console.warn("⚠️ No links found — check if artist_1/artist_2 names match those in the Artist table (case or spacing differences).");
+      }
     })
     .catch(err => {
       document.getElementById("loader").textContent = "⚠️ Failed to load data.";
