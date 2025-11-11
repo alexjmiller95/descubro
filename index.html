@@ -93,13 +93,7 @@
   <div id="loader">Loading artist network...</div>
 
   <script>
-console.log("🧠 Debug mode: starting Descubro visualization...");
-
-const width = window.innerWidth;
-const height = window.innerHeight;
-const svg = d3.select("body").append("svg")
-  .attr("width", width)
-  .attr("height", height);
+console.log("🧠 Debug mode (Bubble object fields) — starting Descubro visualization...");
 
 const artistAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist";
 const connectionAPI = "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500";
@@ -117,51 +111,44 @@ Promise.all([
 
   const clean = str => str ? str.trim().toLowerCase() : "";
 
-  // Step 1: Build artist map
+  // Artist map
   const artistMap = new Map();
   artistsRaw.forEach(a => {
     const name = clean(a.name_text);
     if (!name) return;
-    artistMap.set(name, { id: name, name: a.name_text.trim(), raw: a });
+    artistMap.set(name, { id: name, name: a.name_text });
   });
 
-  console.log("📘 Artist names in map:", Array.from(artistMap.keys()).slice(0, 10));
+  console.log("📘 Sample artistMap keys:", Array.from(artistMap.keys()).slice(0, 10));
 
-  // Step 2: Check connection matches
-  let missingSource = 0;
-  let missingTarget = 0;
-  const debugLinks = [];
-
+  // Check connection fields
   connectionsRaw.forEach(c => {
-    const s = clean(c.artist_1);
-    const t = clean(c.artist_2);
-    const hasS = artistMap.has(s);
-    const hasT = artistMap.has(t);
-
-    if (!hasS || !hasT) {
-      console.warn("⚠️ Missing artist in map:",
-        { artist_1: c.artist_1, artist_2: c.artist_2, hasS, hasT });
-      if (!hasS) missingSource++;
-      if (!hasT) missingTarget++;
-    } else {
-      debugLinks.push({ source: s, target: t });
-    }
+    console.log("🔍 Connection raw artist_1:", c.artist_1);
+    console.log("🔍 Connection raw artist_2:", c.artist_2);
   });
 
-  console.log(`✅ Links matched successfully: ${debugLinks.length}`);
-  console.log(`❌ Missing source artists: ${missingSource}`);
-  console.log(`❌ Missing target artists: ${missingTarget}`);
+  // Extract links using correct Bubble field structure
+  const links = connectionsRaw.map(c => {
+    const a1 = typeof c.artist_1 === "object" ? c.artist_1.display : c.artist_1;
+    const a2 = typeof c.artist_2 === "object" ? c.artist_2.display : c.artist_2;
+    return {
+      source: clean(a1),
+      target: clean(a2),
+      genre: c.genre || "other"
+    };
+  });
 
-  if (debugLinks.length === 0) {
-    console.error("🚨 ZERO LINKS FOUND — name mismatch between ArtistConnection and Artist datasets.");
-    console.log("💡 Example keys in artistMap:", Array.from(artistMap.keys()).slice(0, 10));
-    console.log("💡 Example artist_1 from connection data:", connectionsRaw[0]?.artist_1);
-    console.log("💡 Example artist_2 from connection data:", connectionsRaw[0]?.artist_2);
-  } else {
-    console.log("🔗 First 5 matched links:", debugLinks.slice(0, 5));
+  console.log("🧩 Extracted sample links:", links.slice(0, 5));
+
+  const matched = links.filter(l => artistMap.has(l.source) && artistMap.has(l.target));
+  const missing = links.filter(l => !artistMap.has(l.source) || !artistMap.has(l.target));
+
+  console.log(`✅ Matched links: ${matched.length}`);
+  console.warn(`⚠️ Missing links: ${missing.length}`);
+
+  if (missing.length > 0) {
+    console.warn("Example missing links:", missing.slice(0, 5));
   }
-
-  // You can stop here — no need to render while debugging
 })
 .catch(err => console.error("🚨 Fetch or parsing error:", err));
 </script>
