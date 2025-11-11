@@ -119,34 +119,46 @@
 
       const clean = str => str ? str.trim().toLowerCase() : "";
 
-      // Build artist map
+      // --- Normalize artist genres ---
       const artistMap = new Map();
       artistsRaw.forEach(a => {
         const name = clean(a.name_text);
         if (!name) return;
+
+        let genres = [];
+        if (Array.isArray(a.genre)) {
+          genres = a.genre.map(g => g.toLowerCase().trim());
+        } else if (typeof a.genre === "string") {
+          genres = a.genre.split(/[,/]/).map(g => g.trim().toLowerCase()).filter(g => g);
+        } else if (a.genre_text) {
+          genres = a.genre_text.split(/[,/]/).map(g => g.trim().toLowerCase()).filter(g => g);
+        }
+
+        if (genres.length === 0) genres = ["other"];
+
         artistMap.set(name, {
           id: name,
           name: a.name_text.trim(),
-          genre: a.genre || a.genre_text || "Other"
+          genres: genres
         });
       });
 
-      // Add artists from connections if missing
+      // --- Add any missing artists from connections ---
       connectionsRaw.forEach(c => {
         const a1 = clean(c.artist_1);
         const a2 = clean(c.artist_2);
         if (a1 && !artistMap.has(a1))
-          artistMap.set(a1, { id: a1, name: c.artist_1.trim(), genre: c.genre || "Other" });
+          artistMap.set(a1, { id: a1, name: c.artist_1.trim(), genres: [c.genre?.toLowerCase() || "other"] });
         if (a2 && !artistMap.has(a2))
-          artistMap.set(a2, { id: a2, name: c.artist_2.trim(), genre: c.genre || "Other" });
+          artistMap.set(a2, { id: a2, name: c.artist_2.trim(), genres: [c.genre?.toLowerCase() || "other"] });
       });
 
-      // Build links (using lowercase names to ensure match)
+      // --- Build links ---
       const links = connectionsRaw
         .map(c => ({
           source: clean(c.artist_1),
           target: clean(c.artist_2),
-          genre: c.genre || "Other",
+          genre: c.genre ? c.genre.toLowerCase() : "other",
           strength: c.connection_strength || 1
         }))
         .filter(l => l.source && l.target && artistMap.has(l.source) && artistMap.has(l.target));
@@ -154,13 +166,12 @@
       const nodes = Array.from(artistMap.values());
       console.log("🧩 Final nodes:", nodes.length, "Links:", links.length);
 
-      // Color by genre
-      const allGenres = Array.from(new Set(nodes.map(n => n.genre).concat(links.map(l => l.genre))));
+      // --- Genre clustering setup ---
+      const allGenres = Array.from(new Set(nodes.flatMap(n => n.genres).concat(links.map(l => l.genre))));
       const color = d3.scaleOrdinal(d3.schemeTableau10).domain(allGenres);
 
-      // 🧲 Cluster artists by genre
       const genreCenters = {};
-      const clusterRadius = 200;
+      const clusterRadius = 300;
       const angleStep = (2 * Math.PI) / allGenres.length;
       allGenres.forEach((g, i) => {
         genreCenters[g] = {
@@ -169,16 +180,24 @@
         };
       });
 
-      // D3 Force layout
+      // --- D3 simulation ---
       const simulation = d3.forceSimulation(nodes)
         .force("link", d3.forceLink(links).id(d => d.id).distance(100))
         .force("charge", d3.forceManyBody().strength(-200))
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collision", d3.forceCollide(18))
-        .force("genreCluster", d3.forceX(d => genreCenters[d.genre]?.x || width/2).strength(0.05))
-        .force("genreClusterY", d3.forceY(d => genreCenters[d.genre]?.y || height/2).strength(0.05));
+        .force("genreClusterX", d3.forceX(d => {
+          const avgX = d.genres.map(g => genreCenters[g]?.x || width / 2)
+            .reduce((a, b) => a + b, 0) / d.genres.length;
+          return avgX;
+        }).strength(0.05))
+        .force("genreClusterY", d3.forceY(d => {
+          const avgY = d.genres.map(g => genreCenters[g]?.y || height / 2)
+            .reduce((a, b) => a + b, 0) / d.genres.length;
+          return avgY;
+        }).strength(0.05));
 
-      // Draw links
+      // --- Draw links ---
       const link = svg.append("g")
         .attr("stroke-opacity", 0.6)
         .selectAll("line")
@@ -187,18 +206,18 @@
         .attr("stroke-width", d => Math.max(1, d.strength))
         .attr("stroke", d => color(d.genre));
 
-      // Draw nodes
+      // --- Draw nodes ---
       const node = svg.append("g")
         .selectAll("circle")
         .data(nodes)
         .join("circle")
         .attr("r", 8)
-        .attr("fill", d => color(d.genre))
+        .attr("fill", d => color(d.genres[0] || "other"))
         .call(drag(simulation))
         .on("mouseover", (event, d) => showTooltip(event, d))
         .on("mouseout", hideTooltip);
 
-      // Labels
+      // --- Labels ---
       const label = svg.append("g")
         .selectAll("text")
         .data(nodes)
@@ -208,11 +227,11 @@
         .attr("x", 10)
         .attr("y", 3);
 
-      // Tooltip
+      // --- Tooltip ---
       const tooltip = d3.select("body").append("div").attr("class", "tooltip");
       function showTooltip(event, d) {
         tooltip.transition().duration(200).style("opacity", 1);
-        tooltip.html(`<strong>${d.name}</strong><br>Genre: ${d.genre}`)
+        tooltip.html(`<strong>${d.name}</strong><br>Genres: ${d.genres.join(", ")}`)
           .style("left", (event.pageX + 10) + "px")
           .style("top", (event.pageY - 20) + "px");
       }
@@ -220,7 +239,7 @@
         tooltip.transition().duration(200).style("opacity", 0);
       }
 
-      // Update positions
+      // --- Update positions ---
       simulation.on("tick", () => {
         link
           .attr("x1", d => d.source.x)
@@ -237,7 +256,7 @@
           .attr("y", d => d.y + 3);
       });
 
-      // Drag behavior
+      // --- Dragging behavior ---
       function drag(simulation) {
         function dragstarted(event, d) {
           if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -259,7 +278,7 @@
           .on("end", dragended);
       }
 
-      // Legend
+      // --- Legend ---
       const legend = svg.append("g")
         .attr("class", "legend")
         .attr("transform", "translate(20, 20)");
@@ -276,10 +295,6 @@
           .attr("y", y + 4)
           .text(g);
       });
-
-      if (links.length === 0) {
-        console.warn("⚠️ No links found — check if artist_1/artist_2 names match those in the Artist table (case or spacing differences).");
-      }
     })
     .catch(err => {
       document.getElementById("loader").textContent = "⚠️ Failed to load data.";
