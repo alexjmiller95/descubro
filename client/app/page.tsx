@@ -2,6 +2,24 @@
 import { useEffect, useRef } from "react";
 import * as d3 from "d3";
 
+// 🧩 Define proper types for D3 simulation
+interface ArtistNode extends d3.SimulationNodeDatum {
+  id: string;
+  name: string;
+  image: string;
+  genre: string;
+  x?: number;
+  y?: number;
+  fx?: number | null;
+  fy?: number | null;
+}
+
+interface ArtistLink extends d3.SimulationLinkDatum<ArtistNode> {
+  source: string | ArtistNode;
+  target: string | ArtistNode;
+  strength: number;
+}
+
 export default function Home() {
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -31,10 +49,7 @@ export default function Home() {
         console.log("Unique artist IDs:", uniqueArtistIds);
 
         // 3️⃣ Fetch artist details
-        const artistMap: Record<
-          string,
-          { id: string; name: string; image: string; genre: string }
-        > = {};
+        const artistMap: Record<string, ArtistNode> = {};
 
         for (const artistId of uniqueArtistIds) {
           try {
@@ -60,25 +75,29 @@ export default function Home() {
         console.log("🎨 Artist map:", artistMap);
 
         // 4️⃣ Build nodes & links
-        const nodes = Object.values(artistMap);
-        const links = connections
+        const nodes: ArtistNode[] = Object.values(artistMap);
+        const links: ArtistLink[] = connections
           .map((c: any) => ({
             source: c.artist_11_custom_artist,
             target: c.artist_21_custom_artist,
             strength: c.connection_strength_number || 1,
           }))
-          .filter((l: any) => artistMap[l.source] && artistMap[l.target]);
+          .filter(
+            (l: ArtistLink) => artistMap[l.source as string] && artistMap[l.target as string]
+          );
 
         if (nodes.length === 0 || links.length === 0) {
           console.warn("⚠️ No valid nodes or links to visualize.");
           return;
         }
 
-        // 5️⃣ Compute connection counts for dynamic sizing
+        // 5️⃣ Compute connection counts for dynamic sizing (typed)
         const connectionCount: Record<string, number> = {};
-        links.forEach((l) => {
-          connectionCount[l.source] = (connectionCount[l.source] || 0) + 1;
-          connectionCount[l.target] = (connectionCount[l.target] || 0) + 1;
+        links.forEach((l: ArtistLink) => {
+          const sourceId = typeof l.source === "string" ? l.source : l.source.id;
+          const targetId = typeof l.target === "string" ? l.target : l.target.id;
+          connectionCount[sourceId] = (connectionCount[sourceId] || 0) + 1;
+          connectionCount[targetId] = (connectionCount[targetId] || 0) + 1;
         });
 
         const maxConnections = Math.max(...Object.values(connectionCount));
@@ -128,7 +147,7 @@ export default function Home() {
           .data(links)
           .enter()
           .append("line")
-          .attr("stroke-width", (d: any) => Math.sqrt(d.strength));
+          .attr("stroke-width", (d) => Math.sqrt(d.strength));
 
         // 9️⃣ Nodes (with dynamic size and image)
         const node = svg
@@ -137,15 +156,13 @@ export default function Home() {
           .data(nodes)
           .enter()
           .append("circle")
-          .attr("r", (d: any) => radiusScale(connectionCount[d.id] || 1))
-          .attr("fill", (d: any) =>
-            d.image ? `url(#image-${d.id})` : "#ff6666"
-          )
+          .attr("r", (d) => radiusScale(connectionCount[d.id] || 1))
+          .attr("fill", (d) => (d.image ? `url(#image-${d.id})` : "#ff6666"))
           .attr("stroke", "#fff")
           .attr("stroke-width", 1.5)
           .call(
             d3
-              .drag<SVGCircleElement, any>()
+              .drag<SVGCircleElement, ArtistNode>()
               .on("start", dragstarted)
               .on("drag", dragged)
               .on("end", dragended)
@@ -165,39 +182,40 @@ export default function Home() {
           .style("opacity", 0);
 
         node
-          .on("mouseover", (event: any, d: any) => {
+          .on("mouseover", (event, d) => {
             tooltip
               .html(`<strong>${d.name}</strong><br/><em>${d.genre}</em>`)
               .style("opacity", 1);
           })
-          .on("mousemove", (event: any) => {
+          .on("mousemove", (event) => {
             tooltip
               .style("left", event.pageX + 12 + "px")
               .style("top", event.pageY - 28 + "px");
           })
           .on("mouseout", () => tooltip.style("opacity", 0));
 
-        // 1️⃣1️⃣ Labels
+        // 1️⃣1️⃣ Labels (positioned above node)
         const label = svg
           .append("g")
           .selectAll("text")
           .data(nodes)
           .enter()
           .append("text")
-          .text((d: any) => d.name)
+          .text((d) => d.name)
           .attr("fill", "#fff")
           .attr("font-size", 11)
-          .attr("dx", 25)
-          .attr("dy", 4);
+          .attr("font-family", "Afacad, sans-serif")
+          .attr("text-anchor", "middle")
+          .attr("dy", -radiusScale(2) - 6);
 
         // 1️⃣2️⃣ Force simulation with collision detection 🧠
         const simulation = d3
-          .forceSimulation(nodes)
+          .forceSimulation<ArtistNode>(nodes)
           .force(
             "link",
             d3
-              .forceLink(links)
-              .id((d: any) => d.id)
+              .forceLink<ArtistNode, ArtistLink>(links)
+              .id((d) => d.id)
               .distance(140)
               .strength(0.3)
           )
@@ -205,33 +223,33 @@ export default function Home() {
           .force("center", d3.forceCenter(width / 2, height / 2))
           .force(
             "collision",
-            d3.forceCollide().radius((d: any) => radiusScale(connectionCount[d.id] || 1) + 6)
+            d3.forceCollide<ArtistNode>().radius((d) => radiusScale(connectionCount[d.id] || 1) + 6)
           ) // Prevent overlap
           .on("tick", ticked);
 
         function ticked() {
           link
-            .attr("x1", (d: any) => (d.source as any).x)
-            .attr("y1", (d: any) => (d.source as any).y)
-            .attr("x2", (d: any) => (d.target as any).x)
-            .attr("y2", (d: any) => (d.target as any).y);
+            .attr("x1", (d) => (d.source as ArtistNode).x || 0)
+            .attr("y1", (d) => (d.source as ArtistNode).y || 0)
+            .attr("x2", (d) => (d.target as ArtistNode).x || 0)
+            .attr("y2", (d) => (d.target as ArtistNode).y || 0);
 
-          node.attr("cx", (d: any) => d.x).attr("cy", (d: any) => d.y);
-          label.attr("x", (d: any) => d.x + 25).attr("y", (d: any) => d.y + 4);
+          node.attr("cx", (d) => d.x || 0).attr("cy", (d) => d.y || 0);
+          label.attr("x", (d) => d.x || 0).attr("y", (d) => (d.y || 0) - (radiusScale(connectionCount[d.id] || 1) + 8));
         }
 
-        function dragstarted(event: any, d: any) {
+        function dragstarted(event: any, d: ArtistNode) {
           if (!event.active) simulation.alphaTarget(0.3).restart();
           d.fx = d.x;
           d.fy = d.y;
         }
 
-        function dragged(event: any, d: any) {
+        function dragged(event: any, d: ArtistNode) {
           d.fx = event.x;
           d.fy = event.y;
         }
 
-        function dragended(event: any, d: any) {
+        function dragended(event: any, d: ArtistNode) {
           if (!event.active) simulation.alphaTarget(0);
           d.fx = null;
           d.fy = null;
