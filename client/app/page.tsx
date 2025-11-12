@@ -2,7 +2,6 @@
 import { useEffect, useRef } from "react";
 import * as d3 from "d3";
 
-// 🧩 D3 types
 interface ArtistNode extends d3.SimulationNodeDatum {
   id: string;
   name: string;
@@ -26,19 +25,14 @@ export default function Home() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // 1️⃣ Fetch artist connections
         const res = await fetch(
           "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection"
         );
         const json = await res.json();
         const connections = json.response.results;
 
-        if (!connections || connections.length === 0) {
-          console.warn("No artist connections found.");
-          return;
-        }
+        if (!connections?.length) return console.warn("No artist connections found.");
 
-        // 2️⃣ Collect unique artist IDs
         const uniqueArtistIds = Array.from(
           new Set([
             ...connections.map((c: any) => c.artist_11_custom_artist),
@@ -46,9 +40,6 @@ export default function Home() {
           ])
         ).filter(Boolean);
 
-        console.log("Unique artist IDs:", uniqueArtistIds);
-
-        // 3️⃣ Fetch artist details
         const artistMap: Record<string, ArtistNode> = {};
 
         for (const artistId of uniqueArtistIds) {
@@ -72,9 +63,6 @@ export default function Home() {
           }
         }
 
-        console.log("🎨 Artist map:", artistMap);
-
-        // 4️⃣ Build nodes & links
         const nodes: ArtistNode[] = Object.values(artistMap);
         const links: ArtistLink[] = connections
           .map((c: any) => ({
@@ -83,32 +71,23 @@ export default function Home() {
             strength: c.connection_strength_number || 1,
           }))
           .filter(
-            (l: ArtistLink) => artistMap[l.source as string] && artistMap[l.target as string]
+            (l: ArtistLink) =>
+              artistMap[l.source as string] && artistMap[l.target as string]
           );
 
-        if (nodes.length === 0 || links.length === 0) {
-          console.warn("⚠️ No valid nodes or links to visualize.");
-          return;
-        }
-
-        // 5️⃣ Compute connection counts for dynamic sizing
         const connectionCount: Record<string, number> = {};
-        links.forEach((l: ArtistLink) => {
-          const sourceId = typeof l.source === "string" ? l.source : l.source.id;
-          const targetId = typeof l.target === "string" ? l.target : l.target.id;
-          connectionCount[sourceId] = (connectionCount[sourceId] || 0) + 1;
-          connectionCount[targetId] = (connectionCount[targetId] || 0) + 1;
+        links.forEach((l) => {
+          const s = typeof l.source === "string" ? l.source : l.source.id;
+          const t = typeof l.target === "string" ? l.target : l.target.id;
+          connectionCount[s] = (connectionCount[s] || 0) + 1;
+          connectionCount[t] = (connectionCount[t] || 0) + 1;
         });
 
         const maxConnections = Math.max(...Object.values(connectionCount));
-        const radiusScale = d3
-          .scaleSqrt()
-          .domain([1, maxConnections])
-          .range([15, 35]); // 🟢 Halved base size
+        const radiusScale = d3.scaleSqrt().domain([1, maxConnections]).range([15, 35]);
 
-        // 6️⃣ Setup SVG
-        const width = 1000;
-        const height = 700;
+        const width = 1200;
+        const height = 800;
 
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
@@ -117,7 +96,19 @@ export default function Home() {
           .attr("height", height)
           .style("background", "#0b0b0b");
 
-        // 7️⃣ Image patterns
+        // Main group for zoom/pan
+        const g = svg.append("g");
+
+        // Zoom behaviour
+        svg.call(
+          d3
+            .zoom<SVGSVGElement, unknown>()
+            .scaleExtent([0.3, 4])
+            .on("zoom", (event) => {
+              g.attr("transform", event.transform);
+            })
+        );
+
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           if (n.image) {
@@ -131,14 +122,11 @@ export default function Home() {
               .append("image")
               .attr("href", n.image)
               .attr("width", 80)
-              .attr("height", 80)
-              .attr("x", 0)
-              .attr("y", 0);
+              .attr("height", 80);
           }
         });
 
-        // 8️⃣ Links
-        const link = svg
+        const link = g
           .append("g")
           .attr("stroke", "#00aaff")
           .attr("stroke-opacity", 0.6)
@@ -148,8 +136,7 @@ export default function Home() {
           .append("line")
           .attr("stroke-width", (d) => Math.sqrt(d.strength));
 
-        // 9️⃣ Nodes
-        const node = svg
+        const node = g
           .append("g")
           .selectAll("circle")
           .data(nodes)
@@ -158,43 +145,9 @@ export default function Home() {
           .attr("r", (d) => radiusScale(connectionCount[d.id] || 1))
           .attr("fill", (d) => (d.image ? `url(#image-${d.id})` : "#ff6666"))
           .attr("stroke", "#fff")
-          .attr("stroke-width", 1.5)
-          .call(
-            d3
-              .drag<SVGCircleElement, ArtistNode>()
-              .on("start", dragstarted)
-              .on("drag", dragged)
-              .on("end", dragended)
-          );
+          .attr("stroke-width", 1.5);
 
-        // 🔟 Tooltip
-        const tooltip = d3
-          .select("body")
-          .append("div")
-          .style("position", "absolute")
-          .style("background", "rgba(0,0,0,0.85)")
-          .style("color", "#fff")
-          .style("padding", "6px 10px")
-          .style("border-radius", "6px")
-          .style("font-size", "12px")
-          .style("pointer-events", "none")
-          .style("opacity", 0);
-
-        node
-          .on("mouseover", (event, d) => {
-            tooltip
-              .html(`<strong>${d.name}</strong><br/><em>${d.genre}</em>`)
-              .style("opacity", 1);
-          })
-          .on("mousemove", (event) => {
-            tooltip
-              .style("left", event.pageX + 12 + "px")
-              .style("top", event.pageY - 28 + "px");
-          })
-          .on("mouseout", () => tooltip.style("opacity", 0));
-
-        // 1️⃣1️⃣ Labels
-        const label = svg
+        const label = g
           .append("g")
           .selectAll("text")
           .data(nodes)
@@ -205,11 +158,10 @@ export default function Home() {
           .attr("font-size", 11)
           .attr("font-family", "Afacad, sans-serif")
           .attr("text-anchor", "middle")
-          .attr("dy", (d) => -(radiusScale(connectionCount[d.id] || 1) + 6));
+          .attr("dy", (d) => -(radiusScale(connectionCount[d.id] || 1) + 8));
 
-        // 1️⃣2️⃣ Force simulation
         const simulation = d3
-          .forceSimulation<ArtistNode>(nodes)
+          .forceSimulation(nodes)
           .force(
             "link",
             d3
@@ -222,9 +174,12 @@ export default function Home() {
           .force("center", d3.forceCenter(width / 2, height / 2))
           .force(
             "collision",
-            d3.forceCollide<ArtistNode>().radius((d) => radiusScale(connectionCount[d.id] || 1) + 6)
+            d3.forceCollide<ArtistNode>().radius(
+              (d) => radiusScale(connectionCount[d.id] || 1) + 6
+            )
           )
-          .on("tick", ticked);
+          .on("tick", ticked)
+          .on("end", freezeLayout);
 
         function ticked() {
           link
@@ -234,51 +189,90 @@ export default function Home() {
             .attr("y2", (d) => (d.target as ArtistNode).y || 0);
 
           node.attr("cx", (d) => d.x || 0).attr("cy", (d) => d.y || 0);
-          label.attr("x", (d) => d.x || 0).attr("y", (d) => (d.y || 0) - (radiusScale(connectionCount[d.id] || 1) + 8));
+          label
+            .attr("x", (d) => d.x || 0)
+            .attr(
+              "y",
+              (d) => (d.y || 0) - (radiusScale(connectionCount[d.id] || 1) + 8)
+            );
         }
 
-        // 1️⃣3️⃣ Search functionality
+        // 🧊 Freeze layout after initial simulation
+        function freezeLayout() {
+          simulation.stop();
+          nodes.forEach((n) => {
+            n.fx = n.x;
+            n.fy = n.y;
+          });
+          console.log("🧊 Layout frozen.");
+        }
+
+        // 🔎 Search functionality
         const input = document.getElementById("searchInput") as HTMLInputElement;
 
         input?.addEventListener("input", () => {
           const query = input.value.toLowerCase();
 
+          // Find the searched node
+          const matchedNode = nodes.find((n) =>
+            n.name.toLowerCase().includes(query)
+          );
+
+          const connectedIds = new Set<string>();
+          links.forEach((l) => {
+            const s = typeof l.source === "string" ? l.source : l.source.id;
+            const t = typeof l.target === "string" ? l.target : l.target.id;
+            if (s === matchedNode?.id) connectedIds.add(t);
+            if (t === matchedNode?.id) connectedIds.add(s);
+          });
+
+          // Highlight logic
           node
             .transition()
             .duration(300)
-            .attr("opacity", (d) => (d.name.toLowerCase().includes(query) ? 1 : 0.1))
-            .attr("stroke-width", (d) => (d.name.toLowerCase().includes(query) ? 3 : 1.5));
+            .attr("opacity", (d) =>
+              !query
+                ? 1
+                : d.id === matchedNode?.id || connectedIds.has(d.id)
+                ? 1
+                : 0.15
+            )
+            .attr("stroke-width", (d) => (d.id === matchedNode?.id ? 4 : 1.5));
 
           label
             .transition()
             .duration(300)
-            .attr("opacity", (d) => (d.name.toLowerCase().includes(query) ? 1 : 0.15));
+            .attr("opacity", (d) =>
+              !query
+                ? 1
+                : d.id === matchedNode?.id || connectedIds.has(d.id)
+                ? 1
+                : 0.1
+            );
 
           link
             .transition()
             .duration(300)
             .attr("opacity", (d) => {
-              const src = (d.source as ArtistNode).name.toLowerCase();
-              const tgt = (d.target as ArtistNode).name.toLowerCase();
-              return src.includes(query) || tgt.includes(query) ? 0.8 : 0.1;
+              if (!query) return 0.6;
+              const s = typeof d.source === "string" ? d.source : d.source.id;
+              const t = typeof d.target === "string" ? d.target : d.target.id;
+              return s === matchedNode?.id || t === matchedNode?.id ? 0.8 : 0.1;
             });
-        });
 
-        // 🧩 Drag logic
-        function dragstarted(event: any, d: ArtistNode) {
-          if (!event.active) simulation.alphaTarget(0.3).restart();
-          d.fx = d.x;
-          d.fy = d.y;
-        }
-        function dragged(event: any, d: ArtistNode) {
-          d.fx = event.x;
-          d.fy = event.y;
-        }
-        function dragended(event: any, d: ArtistNode) {
-          if (!event.active) simulation.alphaTarget(0);
-          d.fx = null;
-          d.fy = null;
-        }
+          // Center on the matched node
+          if (matchedNode && matchedNode.x && matchedNode.y) {
+            svg
+              .transition()
+              .duration(750)
+              .call(
+                (d3.zoom().transform as any),
+                d3.zoomIdentity
+                  .translate(width / 2 - matchedNode.x * 1.5, height / 2 - matchedNode.y * 1.5)
+                  .scale(1.5)
+              );
+          }
+        });
       } catch (err) {
         console.error("Error fetching Bubble data:", err);
       }
