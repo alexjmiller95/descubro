@@ -25,6 +25,7 @@ export default function Home() {
   useEffect(() => {
     async function fetchData() {
       try {
+        // 1️⃣ Fetch artist connections
         const res = await fetch(
           "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection"
         );
@@ -33,6 +34,7 @@ export default function Home() {
 
         if (!connections?.length) return console.warn("No artist connections found.");
 
+        // 2️⃣ Get unique artist IDs
         const uniqueArtistIds = Array.from(
           new Set([
             ...connections.map((c: any) => c.artist_11_custom_artist),
@@ -40,6 +42,7 @@ export default function Home() {
           ])
         ).filter(Boolean);
 
+        // 3️⃣ Fetch artist details
         const artistMap: Record<string, ArtistNode> = {};
 
         for (const artistId of uniqueArtistIds) {
@@ -63,6 +66,7 @@ export default function Home() {
           }
         }
 
+        // 4️⃣ Build graph
         const nodes: ArtistNode[] = Object.values(artistMap);
         const links: ArtistLink[] = connections
           .map((c: any) => ({
@@ -75,6 +79,7 @@ export default function Home() {
               artistMap[l.source as string] && artistMap[l.target as string]
           );
 
+        // 5️⃣ Connection counts
         const connectionCount: Record<string, number> = {};
         links.forEach((l) => {
           const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -86,9 +91,9 @@ export default function Home() {
         const maxConnections = Math.max(...Object.values(connectionCount));
         const radiusScale = d3.scaleSqrt().domain([1, maxConnections]).range([15, 35]);
 
+        // 6️⃣ Setup SVG + groups
         const width = 1200;
         const height = 800;
-
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
         svg
@@ -96,19 +101,19 @@ export default function Home() {
           .attr("height", height)
           .style("background", "#0b0b0b");
 
-        // Main group for zoom/pan
         const g = svg.append("g");
 
-        // Zoom behaviour
-        svg.call(
+        // 7️⃣ Zoom & Pan
+        (svg as any).call(
           d3
-            .zoom<SVGSVGElement, unknown>()
+            .zoom()
             .scaleExtent([0.3, 4])
-            .on("zoom", (event) => {
+            .on("zoom", (event: any) => {
               g.attr("transform", event.transform);
             })
         );
 
+        // 8️⃣ Define image patterns
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           if (n.image) {
@@ -126,6 +131,7 @@ export default function Home() {
           }
         });
 
+        // 9️⃣ Draw links
         const link = g
           .append("g")
           .attr("stroke", "#00aaff")
@@ -136,6 +142,7 @@ export default function Home() {
           .append("line")
           .attr("stroke-width", (d) => Math.sqrt(d.strength));
 
+        // 🔟 Draw nodes
         const node = g
           .append("g")
           .selectAll("circle")
@@ -145,8 +152,10 @@ export default function Home() {
           .attr("r", (d) => radiusScale(connectionCount[d.id] || 1))
           .attr("fill", (d) => (d.image ? `url(#image-${d.id})` : "#ff6666"))
           .attr("stroke", "#fff")
-          .attr("stroke-width", 1.5);
+          .attr("stroke-width", 1.5)
+          .style("cursor", "pointer");
 
+        // 🏷️ Draw labels
         const label = g
           .append("g")
           .selectAll("text")
@@ -160,6 +169,7 @@ export default function Home() {
           .attr("text-anchor", "middle")
           .attr("dy", (d) => -(radiusScale(connectionCount[d.id] || 1) + 8));
 
+        // 🧠 Simulation (for layout only once)
         const simulation = d3
           .forceSimulation(nodes)
           .force(
@@ -187,7 +197,6 @@ export default function Home() {
             .attr("y1", (d) => (d.source as ArtistNode).y || 0)
             .attr("x2", (d) => (d.target as ArtistNode).x || 0)
             .attr("y2", (d) => (d.target as ArtistNode).y || 0);
-
           node.attr("cx", (d) => d.x || 0).attr("cy", (d) => d.y || 0);
           label
             .attr("x", (d) => d.x || 0)
@@ -197,81 +206,103 @@ export default function Home() {
             );
         }
 
-        // 🧊 Freeze layout after initial simulation
         function freezeLayout() {
           simulation.stop();
           nodes.forEach((n) => {
             n.fx = n.x;
             n.fy = n.y;
           });
-          console.log("🧊 Layout frozen.");
         }
 
-        // 🔎 Search functionality
-        const input = document.getElementById("searchInput") as HTMLInputElement;
-
-        input?.addEventListener("input", () => {
-          const query = input.value.toLowerCase();
-
-          // Find the searched node
-          const matchedNode = nodes.find((n) =>
-            n.name.toLowerCase().includes(query)
-          );
+        // 🎯 Helper: focus and highlight logic
+        function focusOn(targetNodes: ArtistNode[]) {
+          const targetIds = new Set(targetNodes.map((n) => n.id));
 
           const connectedIds = new Set<string>();
           links.forEach((l) => {
             const s = typeof l.source === "string" ? l.source : l.source.id;
             const t = typeof l.target === "string" ? l.target : l.target.id;
-            if (s === matchedNode?.id) connectedIds.add(t);
-            if (t === matchedNode?.id) connectedIds.add(s);
+            if (targetIds.has(s)) connectedIds.add(t);
+            if (targetIds.has(t)) connectedIds.add(s);
           });
 
-          // Highlight logic
           node
             .transition()
-            .duration(300)
+            .duration(400)
             .attr("opacity", (d) =>
-              !query
-                ? 1
-                : d.id === matchedNode?.id || connectedIds.has(d.id)
-                ? 1
-                : 0.15
+              targetIds.has(d.id) || connectedIds.has(d.id) ? 1 : 0.15
             )
-            .attr("stroke-width", (d) => (d.id === matchedNode?.id ? 4 : 1.5));
+            .attr("stroke-width", (d) => (targetIds.has(d.id) ? 4 : 1.5));
 
           label
             .transition()
-            .duration(300)
+            .duration(400)
             .attr("opacity", (d) =>
-              !query
-                ? 1
-                : d.id === matchedNode?.id || connectedIds.has(d.id)
-                ? 1
-                : 0.1
+              targetIds.has(d.id) || connectedIds.has(d.id) ? 1 : 0.1
             );
 
           link
             .transition()
-            .duration(300)
+            .duration(400)
             .attr("opacity", (d) => {
-              if (!query) return 0.6;
               const s = typeof d.source === "string" ? d.source : d.source.id;
               const t = typeof d.target === "string" ? d.target : d.target.id;
-              return s === matchedNode?.id || t === matchedNode?.id ? 0.8 : 0.1;
+              return targetIds.has(s) || targetIds.has(t) ? 0.8 : 0.1;
             });
 
-          // Center on the matched node
-          if (matchedNode && matchedNode.x && matchedNode.y) {
+          // Center camera
+          if (targetNodes.length > 0) {
+            const avgX =
+              targetNodes.reduce((acc, n) => acc + (n.x || 0), 0) /
+              targetNodes.length;
+            const avgY =
+              targetNodes.reduce((acc, n) => acc + (n.y || 0), 0) /
+              targetNodes.length;
+
             svg
               .transition()
-              .duration(750)
+              .duration(800)
               .call(
                 (d3.zoom().transform as any),
                 d3.zoomIdentity
-                  .translate(width / 2 - matchedNode.x * 1.5, height / 2 - matchedNode.y * 1.5)
+                  .translate(width / 2 - avgX * 1.5, height / 2 - avgY * 1.5)
                   .scale(1.5)
               );
           }
+        }
+
+        // 🖱️ Click to focus on artist
+        node.on("click", (_, d) => {
+          focusOn([d]);
+          const search = document.getElementById(
+            "searchInput"
+          ) as HTMLInputElement;
+          if (search) search.value = d.name;
+        });
+
+        // 🔍 Search: Artist or Genre
+        const input = document.getElementById("searchInput") as HTMLInputElement;
+        input?.addEventListener("input", () => {
+          const query = input.value.toLowerCase();
+
+          if (!query) {
+            node.transition().attr("opacity", 1).attr("stroke-width", 1.5);
+            label.transition().attr("opacity", 1);
+            link.transition().attr("opacity", 0.6);
+            return;
+          }
+
+          // Artist search
+          const artistMatches = nodes.filter((n) =>
+            n.name.toLowerCase().includes(query)
+          );
+          // Genre search
+          const genreMatches = nodes.filter((n) =>
+            n.genre.toLowerCase().includes(query)
+          );
+
+          const matches = artistMatches.length ? artistMatches : genreMatches;
+          focusOn(matches);
         });
       } catch (err) {
         console.error("Error fetching Bubble data:", err);
@@ -286,7 +317,7 @@ export default function Home() {
       <input
         id="searchInput"
         type="text"
-        placeholder="Search for an artist..."
+        placeholder="Search artist or genre..."
         className="w-1/2 p-2 rounded-md bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
       <svg ref={svgRef}></svg>
