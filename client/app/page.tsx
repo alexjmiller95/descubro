@@ -25,7 +25,7 @@ export default function Home() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // 1️⃣ Fetch connections
+        // 1️⃣ Fetch artist connections
         const res = await fetch(
           "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection"
         );
@@ -34,7 +34,7 @@ export default function Home() {
 
         if (!connections?.length) return console.warn("No artist connections found.");
 
-        // 2️⃣ Collect unique artists
+        // 2️⃣ Unique artist IDs
         const uniqueArtistIds = Array.from(
           new Set([
             ...connections.map((c: any) => c.artist_11_custom_artist),
@@ -42,7 +42,7 @@ export default function Home() {
           ])
         ).filter(Boolean);
 
-        // 3️⃣ Fetch artist info
+        // 3️⃣ Fetch artist details
         const artistMap: Record<string, ArtistNode> = {};
         for (const artistId of uniqueArtistIds) {
           try {
@@ -54,7 +54,7 @@ export default function Home() {
 
             artistMap[artistId] = {
               id: artistId,
-              name: a.name_text || "Unknown Artist",
+              name: a.name_text || "Unknown",
               image: a.image_url_text || "",
               genre: Array.isArray(a.genre_list_text)
                 ? a.genre_list_text[0] || "Unknown"
@@ -65,6 +65,7 @@ export default function Home() {
           }
         }
 
+        // 4️⃣ Build graph
         const nodes: ArtistNode[] = Object.values(artistMap);
         const links: ArtistLink[] = connections
           .map((c: any) => ({
@@ -77,7 +78,7 @@ export default function Home() {
               artistMap[l.source as string] && artistMap[l.target as string]
           );
 
-        // 4️⃣ Connection counts
+        // 5️⃣ Connection count
         const connectionCount: Record<string, number> = {};
         links.forEach((l) => {
           const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -86,15 +87,15 @@ export default function Home() {
           connectionCount[t] = (connectionCount[t] || 0) + 1;
         });
 
-        // 5️⃣ Scales
+        // 6️⃣ Scales
         const maxConnections = Math.max(...Object.values(connectionCount));
-        const radiusScale = d3.scaleSqrt().domain([1, maxConnections]).range([30, 70]); // 2x larger
+        const radiusScale = d3.scaleSqrt().domain([1, maxConnections]).range([30, 70]);
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
 
         const width = 1200;
         const height = 800;
 
-        // 6️⃣ SVG Setup
+        // 7️⃣ Setup SVG
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
         svg
@@ -111,7 +112,7 @@ export default function Home() {
             .on("zoom", (event: any) => g.attr("transform", event.transform))
         );
 
-        // 7️⃣ Image patterns
+        // 8️⃣ Patterns (artist images)
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           if (n.image) {
@@ -126,22 +127,34 @@ export default function Home() {
               .attr("href", n.image)
               .attr("width", 150)
               .attr("height", 150)
-              .attr("preserveAspectRatio", "xMidYMid slice"); // Fill full circle
+              .attr("preserveAspectRatio", "xMidYMid slice");
           }
         });
 
-        // 8️⃣ Links
+        // 9️⃣ Genre color lookup for edges
+        const genreColorMap: Record<string, string> = {};
+        nodes.forEach((n) => {
+          if (!genreColorMap[n.genre]) {
+            genreColorMap[n.genre] = colorScale(n.genre) as string;
+          }
+        });
+
+        // 🔟 Links (color-coded by source genre)
         const link = g
           .append("g")
-          .attr("stroke", "#00aaff")
-          .attr("stroke-opacity", 0.6)
           .selectAll("line")
           .data(links)
           .enter()
           .append("line")
-          .attr("stroke-width", (d) => Math.sqrt(d.strength) * 2); // Double line width
+          .attr("stroke", (d) => {
+            const src = typeof d.source === "string" ? d.source : d.source.id;
+            const srcGenre = artistMap[src]?.genre;
+            return genreColorMap[srcGenre] || "#00aaff";
+          })
+          .attr("stroke-opacity", 0.8)
+          .attr("stroke-width", (d) => Math.sqrt(d.strength) * 2);
 
-        // 9️⃣ Nodes
+        // 🟢 Nodes (genre border color)
         const node = g
           .append("g")
           .selectAll("circle")
@@ -150,25 +163,21 @@ export default function Home() {
           .append("circle")
           .attr("r", (d) => radiusScale(connectionCount[d.id] || 1))
           .attr("fill", (d) => (d.image ? `url(#image-${d.id})` : "#ff6666"))
-          .attr("stroke", (d) => colorScale(d.genre))
+          .attr("stroke", (d) => genreColorMap[d.genre])
           .attr("stroke-width", 4)
           .style("cursor", "pointer");
 
-        // 🔟 Labels (near node)
-        const label = g
-          .append("g")
-          .selectAll("text")
-          .data(nodes)
-          .enter()
-          .append("text")
-          .text((d) => d.name)
-          .attr("fill", "#fff")
-          .attr("font-size", 12)
-          .attr("font-family", "Afacad, sans-serif")
-          .attr("text-anchor", "middle")
-          .attr("dy", (d) => -(radiusScale(connectionCount[d.id] || 1) + 1)); // almost touching
+        // 🧠 Force layout (cluster by genre)
+        const genres = Array.from(new Set(nodes.map((n) => n.genre)));
+        const genrePositions: Record<string, [number, number]> = {};
+        const stepX = width / (Math.ceil(Math.sqrt(genres.length)) + 1);
+        const stepY = height / (Math.ceil(Math.sqrt(genres.length)) + 1);
+        genres.forEach((gname, i) => {
+          const col = i % Math.ceil(Math.sqrt(genres.length));
+          const row = Math.floor(i / Math.ceil(Math.sqrt(genres.length)));
+          genrePositions[gname] = [stepX * (col + 1), stepY * (row + 1)];
+        });
 
-        // 🧊 Simulation
         const simulation = d3
           .forceSimulation(nodes)
           .force(
@@ -179,14 +188,10 @@ export default function Home() {
               .distance(280)
               .strength(0.3)
           )
-          .force("charge", d3.forceManyBody().strength(-250))
-          .force("center", d3.forceCenter(width / 2, height / 2))
-          .force(
-            "collision",
-            d3.forceCollide<ArtistNode>().radius(
-              (d) => radiusScale(connectionCount[d.id] || 1) + 10
-            )
-          )
+          .force("charge", d3.forceManyBody().strength(-300))
+          .force("collision", d3.forceCollide((d) => radiusScale(connectionCount[d.id]) + 10))
+          .force("x", d3.forceX((d) => genrePositions[d.genre]?.[0] || width / 2).strength(0.2))
+          .force("y", d3.forceY((d) => genrePositions[d.genre]?.[1] || height / 2).strength(0.2))
           .on("tick", ticked)
           .on("end", freezeLayout);
 
@@ -197,12 +202,6 @@ export default function Home() {
             .attr("x2", (d) => (d.target as ArtistNode).x || 0)
             .attr("y2", (d) => (d.target as ArtistNode).y || 0);
           node.attr("cx", (d) => d.x || 0).attr("cy", (d) => d.y || 0);
-          label
-            .attr("x", (d) => d.x || 0)
-            .attr(
-              "y",
-              (d) => (d.y || 0) - (radiusScale(connectionCount[d.id] || 1) + 1)
-            );
         }
 
         function freezeLayout() {
@@ -213,48 +212,7 @@ export default function Home() {
           });
         }
 
-        // 🧠 Tooltip
-        const tooltip = d3
-          .select("body")
-          .append("div")
-          .style("position", "absolute")
-          .style("background", "rgba(20, 20, 20, 0.95)")
-          .style("color", "#fff")
-          .style("padding", "10px 12px")
-          .style("border-radius", "8px")
-          .style("font-size", "13px")
-          .style("font-family", "Afacad, sans-serif")
-          .style("pointer-events", "none")
-          .style("box-shadow", "0 4px 12px rgba(0,0,0,0.5)")
-          .style("opacity", 0)
-          .style("transition", "opacity 0.2s ease");
-
-        node
-          .on("mouseover", (event, d) => {
-            tooltip
-              .html(`
-                <div style="display:flex;align-items:center;gap:10px;">
-                  <img src="${d.image}" width="40" height="40" style="border-radius:50%;object-fit:cover;" />
-                  <div>
-                    <div style="font-weight:600;">${d.name}</div>
-                    <div style="color:#aaa;">${d.genre}</div>
-                    <div style="color:#00aaff;font-size:12px;">Connections: ${
-                      connectionCount[d.id] || 0
-                    }</div>
-                  </div>
-                </div>
-              `)
-              .style("opacity", 1);
-          })
-          .on("mousemove", (event) => {
-            tooltip
-              .style("left", event.pageX + 15 + "px")
-              .style("top", event.pageY - 35 + "px");
-          })
-          .on("mouseout", () => tooltip.style("opacity", 0));
-
-        // 🎨 Genre Legend
-        const uniqueGenres = Array.from(new Set(nodes.map((n) => n.genre)));
+        // 🎨 Genre legend
         const legend = d3
           .select("#legend")
           .html("")
@@ -268,7 +226,7 @@ export default function Home() {
           .style("font-size", "13px")
           .style("color", "#fff");
 
-        uniqueGenres.forEach((genre) => {
+        Object.entries(genreColorMap).forEach(([genre, color]) => {
           legend
             .append("div")
             .style("display", "flex")
@@ -276,17 +234,14 @@ export default function Home() {
             .style("gap", "8px")
             .style("margin-bottom", "4px")
             .html(
-              `<div style="width:12px;height:12px;background:${colorScale(
-                genre
-              )};border-radius:50%;"></div> ${genre}`
+              `<div style="width:12px;height:12px;background:${color};border-radius:50%;"></div> ${genre}`
             );
         });
 
-        // 🔁 Reset View
+        // 🔁 Reset
         d3.select("#resetBtn").on("click", () => {
-          node.transition().attr("opacity", 1).attr("stroke-width", 4);
-          label.transition().attr("opacity", 1);
-          link.transition().attr("opacity", 0.6);
+          node.transition().attr("opacity", 1);
+          link.transition().attr("opacity", 0.8);
           svg
             .transition()
             .duration(800)
@@ -294,42 +249,6 @@ export default function Home() {
               (d3.zoom().transform as any),
               d3.zoomIdentity.translate(0, 0).scale(1)
             );
-        });
-
-        // 🔍 Search
-        const input = document.getElementById("searchInput") as HTMLInputElement;
-        input?.addEventListener("input", () => {
-          const query = input.value.toLowerCase();
-          if (!query) {
-            node.transition().attr("opacity", 1).attr("stroke-width", 4);
-            label.transition().attr("opacity", 1);
-            link.transition().attr("opacity", 0.6);
-            return;
-          }
-
-          const matches = nodes.filter(
-            (n) =>
-              n.name.toLowerCase().includes(query) ||
-              n.genre.toLowerCase().includes(query)
-          );
-
-          const matchIds = new Set(matches.map((m) => m.id));
-          node
-            .transition()
-            .duration(400)
-            .attr("opacity", (d) => (matchIds.has(d.id) ? 1 : 0.15));
-          label
-            .transition()
-            .duration(400)
-            .attr("opacity", (d) => (matchIds.has(d.id) ? 1 : 0.1));
-          link
-            .transition()
-            .duration(400)
-            .attr("opacity", (d) => {
-              const s = typeof d.source === "string" ? d.source : d.source.id;
-              const t = typeof d.target === "string" ? d.target : d.target.id;
-              return matchIds.has(s) || matchIds.has(t) ? 0.8 : 0.1;
-            });
         });
       } catch (err) {
         console.error("Error fetching Bubble data:", err);
@@ -340,17 +259,22 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="flex flex-col items-center min-h-screen bg-black text-white p-6 space-y-4 relative">
+    <div
+      className="flex flex-col items-center min-h-screen bg-black text-white p-6 space-y-4 relative"
+      style={{ fontFamily: "Afacad, sans-serif" }}
+    >
       <div className="flex w-full justify-center gap-4 items-center">
         <input
           id="searchInput"
           type="text"
           placeholder="Search artist or genre..."
           className="w-1/2 p-2 rounded-md bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          style={{ fontFamily: "Afacad, sans-serif" }}
         />
         <button
           id="resetBtn"
           className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-white font-medium"
+          style={{ fontFamily: "Afacad, sans-serif" }}
         >
           Reset View
         </button>
