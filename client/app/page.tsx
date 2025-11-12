@@ -73,9 +73,10 @@ export default function Home() {
           connectionCount[t] = (connectionCount[t] || 0) + 1;
         });
 
-        const width = 1200;
-        const height = 800;
-        const baseRadius = 60;
+        // ✨ Layout constants
+        const width = 1400;
+        const height = 900;
+        const baseRadius = 120; // doubled size
         const highlightScale = 1.1;
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
 
@@ -85,6 +86,7 @@ export default function Home() {
           if (!genreColorMap[g]) genreColorMap[g] = colorScale(g) as string;
         });
 
+        // SVG setup
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
         svg.attr("width", width).attr("height", height).style("background", "#0b0b0b");
@@ -94,11 +96,11 @@ export default function Home() {
         (svg as any).call(
           d3
             .zoom()
-            .scaleExtent([0.3, 4])
+            .scaleExtent([0.3, 3])
             .on("zoom", (event: any) => g.attr("transform", event.transform))
         );
 
-        // 🖼️ Image fills
+        // 🖼️ Pattern fills (for circular photos)
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           const pattern = defs
@@ -128,7 +130,7 @@ export default function Home() {
             return genreColorMap[srcGenre] || "#00aaff";
           })
           .attr("stroke-opacity", 0.8)
-          .attr("stroke-width", 3);
+          .attr("stroke-width", 4);
 
         // 🟣 Nodes
         const node = g
@@ -140,10 +142,10 @@ export default function Home() {
           .attr("r", baseRadius)
           .attr("fill", (d) => `url(#image-${d.id})`)
           .attr("stroke", (d) => genreColorMap[d.genre.split(",")[0].trim()])
-          .attr("stroke-width", 4)
+          .attr("stroke-width", 5)
           .style("cursor", "pointer");
 
-        // 🧠 Cluster separation
+        // 🧠 Genre-separated grid layout
         const genres = Array.from(new Set(nodes.map((n) => n.genre.split(",")[0].trim())));
         const genrePositions: Record<string, [number, number]> = {};
         const stepX = width / (genres.length + 1);
@@ -151,14 +153,18 @@ export default function Home() {
           genrePositions[gname] = [stepX * (i + 1), height / 2];
         });
 
+        // 🧩 Force simulation
         const simulation = d3
           .forceSimulation<ArtistNode>(nodes)
           .force(
             "link",
-            d3.forceLink<ArtistNode, ArtistLink>(links).id((d) => d.id).distance(500)
+            d3
+              .forceLink<ArtistNode, ArtistLink>(links)
+              .id((d) => d.id)
+              .distance(900) // doubled distance
           )
-          .force("charge", d3.forceManyBody().strength(-600))
-          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 40))
+          .force("charge", d3.forceManyBody().strength(-1000))
+          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 80)) // strong separation
           .force(
             "x",
             d3
@@ -210,34 +216,37 @@ export default function Home() {
           .style("box-shadow", "0 4px 12px rgba(0,0,0,0.5)")
           .style("opacity", 0);
 
+        function showTooltip(event: any, d: ArtistNode) {
+          tooltip
+            .html(
+              `<strong>${d.name.toUpperCase()}</strong><br/>
+               GENRE: ${d.genre.toUpperCase()}<br/>
+               CONNECTIONS: ${(connectionCount[d.id] || 0).toString().toUpperCase()}`
+            )
+            .style("opacity", 1)
+            .style("left", event.pageX + 15 + "px")
+            .style("top", event.pageY - 35 + "px");
+        }
+
         node
-          .on("mouseover", (event, d) => {
-            tooltip
-              .html(`
-                <strong>${d.name}</strong><br/>
-                ${d.genre}<br/>
-                Connections: ${connectionCount[d.id] || 0}
-              `)
-              .style("opacity", 1);
-          })
-          .on("mousemove", (event) => {
-            tooltip
-              .style("left", event.pageX + 15 + "px")
-              .style("top", event.pageY - 35 + "px");
-          })
+          .on("mouseover", showTooltip)
+          .on("mousemove", showTooltip)
           .on("mouseout", () => tooltip.style("opacity", 0));
 
         // 🧠 Click highlight toggle
         let activeNode: ArtistNode | null = null;
 
-        function highlightNode(selectedNode: ArtistNode) {
+        function highlightNode(selectedNode: ArtistNode, event?: any) {
           if (activeNode && activeNode.id === selectedNode.id) {
-            resetHighlight();
             activeNode = null;
+            resetHighlight();
+            tooltip.style("opacity", 0);
             return;
           }
 
           activeNode = selectedNode;
+          showTooltip(event, selectedNode);
+
           const connectedIds = new Set<string>();
           links.forEach((l) => {
             const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -275,7 +284,7 @@ export default function Home() {
           link.transition().duration(200).attr("opacity", 0.8);
         }
 
-        node.on("click", (_, d) => highlightNode(d));
+        node.on("click", (event, d) => highlightNode(d, event));
 
         // 🔍 Search
         const searchInput = d3.select("#searchInput");
@@ -283,6 +292,7 @@ export default function Home() {
           const value = event.target.value.toLowerCase().trim();
           if (!value) {
             resetHighlight();
+            tooltip.style("opacity", 0);
             return;
           }
 
@@ -298,6 +308,7 @@ export default function Home() {
         d3.select("#resetBtn").on("click", () => {
           activeNode = null;
           resetHighlight();
+          tooltip.style("opacity", 0);
           svg
             .transition()
             .duration(800)
