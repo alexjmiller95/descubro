@@ -25,7 +25,6 @@ export default function Home() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // 1️⃣ Fetch artist connections
         const res = await fetch(
           "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection"
         );
@@ -34,7 +33,6 @@ export default function Home() {
 
         if (!connections?.length) return console.warn("No artist connections found.");
 
-        // 2️⃣ Unique artist IDs
         const uniqueArtistIds = Array.from(
           new Set([
             ...connections.map((c: any) => c.artist_11_custom_artist),
@@ -42,7 +40,6 @@ export default function Home() {
           ])
         ).filter(Boolean);
 
-        // 3️⃣ Fetch artist details
         const artistMap: Record<string, ArtistNode> = {};
         for (const artistId of uniqueArtistIds) {
           try {
@@ -65,7 +62,6 @@ export default function Home() {
           }
         }
 
-        // 4️⃣ Build graph
         const nodes: ArtistNode[] = Object.values(artistMap);
         const links: ArtistLink[] = connections
           .map((c: any) => ({
@@ -78,7 +74,6 @@ export default function Home() {
               artistMap[l.source as string] && artistMap[l.target as string]
           );
 
-        // 5️⃣ Connection count
         const connectionCount: Record<string, number> = {};
         links.forEach((l) => {
           const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -87,7 +82,6 @@ export default function Home() {
           connectionCount[t] = (connectionCount[t] || 0) + 1;
         });
 
-        // 6️⃣ Scales
         const maxConnections = Math.max(...Object.values(connectionCount));
         const radiusScale = d3.scaleSqrt().domain([1, maxConnections]).range([30, 70]);
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
@@ -95,7 +89,6 @@ export default function Home() {
         const width = 1200;
         const height = 800;
 
-        // 7️⃣ Setup SVG
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
         svg
@@ -112,7 +105,6 @@ export default function Home() {
             .on("zoom", (event: any) => g.attr("transform", event.transform))
         );
 
-        // 8️⃣ Patterns (artist images)
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           if (n.image) {
@@ -131,7 +123,6 @@ export default function Home() {
           }
         });
 
-        // 9️⃣ Genre color lookup for edges
         const genreColorMap: Record<string, string> = {};
         nodes.forEach((n) => {
           if (!genreColorMap[n.genre]) {
@@ -139,7 +130,6 @@ export default function Home() {
           }
         });
 
-        // 🔟 Links (color-coded by source genre)
         const link = g
           .append("g")
           .selectAll("line")
@@ -154,7 +144,6 @@ export default function Home() {
           .attr("stroke-opacity", 0.8)
           .attr("stroke-width", (d) => Math.sqrt(d.strength) * 2);
 
-        // 🟢 Nodes (genre border color)
         const node = g
           .append("g")
           .selectAll("circle")
@@ -167,7 +156,7 @@ export default function Home() {
           .attr("stroke-width", 4)
           .style("cursor", "pointer");
 
-        // 🧠 Force layout (cluster by genre)
+        // 🧠 Genre clustering
         const genres = Array.from(new Set(nodes.map((n) => n.genre)));
         const genrePositions: Record<string, [number, number]> = {};
         const stepX = width / (Math.ceil(Math.sqrt(genres.length)) + 1);
@@ -179,7 +168,7 @@ export default function Home() {
         });
 
         const simulation = d3
-          .forceSimulation(nodes)
+          .forceSimulation<ArtistNode>(nodes)
           .force(
             "link",
             d3
@@ -189,9 +178,29 @@ export default function Home() {
               .strength(0.3)
           )
           .force("charge", d3.forceManyBody().strength(-300))
-          .force("collision", d3.forceCollide((d) => radiusScale(connectionCount[d.id]) + 10))
-          .force("x", d3.forceX((d) => genrePositions[d.genre]?.[0] || width / 2).strength(0.2))
-          .force("y", d3.forceY((d) => genrePositions[d.genre]?.[1] || height / 2).strength(0.2))
+          .force(
+            "collision",
+            d3.forceCollide<ArtistNode>(
+              (d) => radiusScale(connectionCount[d.id]) + 10
+            )
+          )
+          // 🩵 ✅ FIXED HERE: Type-safe generic <ArtistNode> for genre access
+          .force(
+            "x",
+            d3
+              .forceX<ArtistNode>(
+                (d) => genrePositions[d.genre]?.[0] || width / 2
+              )
+              .strength(0.2)
+          )
+          .force(
+            "y",
+            d3
+              .forceY<ArtistNode>(
+                (d) => genrePositions[d.genre]?.[1] || height / 2
+              )
+              .strength(0.2)
+          )
           .on("tick", ticked)
           .on("end", freezeLayout);
 
@@ -212,7 +221,6 @@ export default function Home() {
           });
         }
 
-        // 🎨 Genre legend
         const legend = d3
           .select("#legend")
           .html("")
@@ -238,7 +246,6 @@ export default function Home() {
             );
         });
 
-        // 🔁 Reset
         d3.select("#resetBtn").on("click", () => {
           node.transition().attr("opacity", 1);
           link.transition().attr("opacity", 0.8);
