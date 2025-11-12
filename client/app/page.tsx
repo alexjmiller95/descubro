@@ -25,7 +25,6 @@ export default function Home() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // 1️⃣ Fetch artist connections
         const res = await fetch(
           "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection"
         );
@@ -34,7 +33,6 @@ export default function Home() {
 
         if (!connections?.length) return console.warn("No artist connections found.");
 
-        // 2️⃣ Get unique artist IDs
         const uniqueArtistIds = Array.from(
           new Set([
             ...connections.map((c: any) => c.artist_11_custom_artist),
@@ -42,9 +40,7 @@ export default function Home() {
           ])
         ).filter(Boolean);
 
-        // 3️⃣ Fetch artist details
         const artistMap: Record<string, ArtistNode> = {};
-
         for (const artistId of uniqueArtistIds) {
           try {
             const res = await fetch(
@@ -66,7 +62,6 @@ export default function Home() {
           }
         }
 
-        // 4️⃣ Build graph
         const nodes: ArtistNode[] = Object.values(artistMap);
         const links: ArtistLink[] = connections
           .map((c: any) => ({
@@ -79,7 +74,6 @@ export default function Home() {
               artistMap[l.source as string] && artistMap[l.target as string]
           );
 
-        // 5️⃣ Connection counts
         const connectionCount: Record<string, number> = {};
         links.forEach((l) => {
           const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -91,7 +85,6 @@ export default function Home() {
         const maxConnections = Math.max(...Object.values(connectionCount));
         const radiusScale = d3.scaleSqrt().domain([1, maxConnections]).range([15, 35]);
 
-        // 6️⃣ Setup SVG + groups
         const width = 1200;
         const height = 800;
         const svg = d3.select(svgRef.current);
@@ -103,17 +96,13 @@ export default function Home() {
 
         const g = svg.append("g");
 
-        // 7️⃣ Zoom & Pan
         (svg as any).call(
           d3
             .zoom()
             .scaleExtent([0.3, 4])
-            .on("zoom", (event: any) => {
-              g.attr("transform", event.transform);
-            })
+            .on("zoom", (event: any) => g.attr("transform", event.transform))
         );
 
-        // 8️⃣ Define image patterns
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           if (n.image) {
@@ -131,7 +120,6 @@ export default function Home() {
           }
         });
 
-        // 9️⃣ Draw links
         const link = g
           .append("g")
           .attr("stroke", "#00aaff")
@@ -142,7 +130,6 @@ export default function Home() {
           .append("line")
           .attr("stroke-width", (d) => Math.sqrt(d.strength));
 
-        // 🔟 Draw nodes
         const node = g
           .append("g")
           .selectAll("circle")
@@ -155,7 +142,6 @@ export default function Home() {
           .attr("stroke-width", 1.5)
           .style("cursor", "pointer");
 
-        // 🏷️ Draw labels
         const label = g
           .append("g")
           .selectAll("text")
@@ -167,9 +153,9 @@ export default function Home() {
           .attr("font-size", 11)
           .attr("font-family", "Afacad, sans-serif")
           .attr("text-anchor", "middle")
-          .attr("dy", (d) => -(radiusScale(connectionCount[d.id] || 1) + 8));
+          .attr("dy", (d) => -(radiusScale(connectionCount[d.id] || 1) + 2)); // Closer labels
 
-        // 🧠 Simulation (for layout only once)
+        // 🧊 2x node distance
         const simulation = d3
           .forceSimulation(nodes)
           .force(
@@ -177,7 +163,7 @@ export default function Home() {
             d3
               .forceLink<ArtistNode, ArtistLink>(links)
               .id((d) => d.id)
-              .distance(140)
+              .distance(280) // doubled spacing
               .strength(0.3)
           )
           .force("charge", d3.forceManyBody().strength(-250))
@@ -202,7 +188,7 @@ export default function Home() {
             .attr("x", (d) => d.x || 0)
             .attr(
               "y",
-              (d) => (d.y || 0) - (radiusScale(connectionCount[d.id] || 1) + 8)
+              (d) => (d.y || 0) - (radiusScale(connectionCount[d.id] || 1) + 2)
             );
         }
 
@@ -214,10 +200,51 @@ export default function Home() {
           });
         }
 
-        // 🎯 Helper: focus and highlight logic
+        // 🎨 Tooltip setup
+        const tooltip = d3
+          .select("body")
+          .append("div")
+          .style("position", "absolute")
+          .style("background", "rgba(20, 20, 20, 0.95)")
+          .style("color", "#fff")
+          .style("padding", "10px 12px")
+          .style("border-radius", "8px")
+          .style("font-size", "13px")
+          .style("font-family", "Afacad, sans-serif")
+          .style("pointer-events", "none")
+          .style("box-shadow", "0 4px 12px rgba(0,0,0,0.5)")
+          .style("opacity", 0)
+          .style("transition", "opacity 0.2s ease");
+
+        node
+          .on("mouseover", (event, d) => {
+            tooltip
+              .html(`
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <img src="${d.image}" width="40" height="40" style="border-radius: 50%; object-fit: cover;" />
+                  <div>
+                    <div style="font-weight: 600;">${d.name}</div>
+                    <div style="color: #aaa;">${d.genre}</div>
+                    <div style="color: #00aaff; font-size: 12px;">
+                      Connections: ${connectionCount[d.id] || 0}
+                    </div>
+                  </div>
+                </div>
+              `)
+              .style("opacity", 1);
+          })
+          .on("mousemove", (event) => {
+            tooltip
+              .style("left", event.pageX + 15 + "px")
+              .style("top", event.pageY - 35 + "px");
+          })
+          .on("mouseout", () => {
+            tooltip.style("opacity", 0);
+          });
+
+        // Focus logic reused for search & click
         function focusOn(targetNodes: ArtistNode[]) {
           const targetIds = new Set(targetNodes.map((n) => n.id));
-
           const connectedIds = new Set<string>();
           links.forEach((l) => {
             const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -233,14 +260,12 @@ export default function Home() {
               targetIds.has(d.id) || connectedIds.has(d.id) ? 1 : 0.15
             )
             .attr("stroke-width", (d) => (targetIds.has(d.id) ? 4 : 1.5));
-
           label
             .transition()
             .duration(400)
             .attr("opacity", (d) =>
               targetIds.has(d.id) || connectedIds.has(d.id) ? 1 : 0.1
             );
-
           link
             .transition()
             .duration(400)
@@ -250,7 +275,6 @@ export default function Home() {
               return targetIds.has(s) || targetIds.has(t) ? 0.8 : 0.1;
             });
 
-          // Center camera
           if (targetNodes.length > 0) {
             const avgX =
               targetNodes.reduce((acc, n) => acc + (n.x || 0), 0) /
@@ -271,7 +295,6 @@ export default function Home() {
           }
         }
 
-        // 🖱️ Click to focus on artist
         node.on("click", (_, d) => {
           focusOn([d]);
           const search = document.getElementById(
@@ -280,11 +303,9 @@ export default function Home() {
           if (search) search.value = d.name;
         });
 
-        // 🔍 Search: Artist or Genre
         const input = document.getElementById("searchInput") as HTMLInputElement;
         input?.addEventListener("input", () => {
           const query = input.value.toLowerCase();
-
           if (!query) {
             node.transition().attr("opacity", 1).attr("stroke-width", 1.5);
             label.transition().attr("opacity", 1);
@@ -292,15 +313,12 @@ export default function Home() {
             return;
           }
 
-          // Artist search
           const artistMatches = nodes.filter((n) =>
             n.name.toLowerCase().includes(query)
           );
-          // Genre search
           const genreMatches = nodes.filter((n) =>
             n.genre.toLowerCase().includes(query)
           );
-
           const matches = artistMatches.length ? artistMatches : genreMatches;
           focusOn(matches);
         });
