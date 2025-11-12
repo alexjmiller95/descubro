@@ -26,7 +26,6 @@ export default function Home() {
         );
         const json = await res.json();
         const connections = json.response.results;
-
         if (!connections?.length) return console.warn("No artist connections found.");
 
         const uniqueArtistIds = Array.from(
@@ -38,24 +37,20 @@ export default function Home() {
 
         const artistMap: Record<string, ArtistNode> = {};
         for (const artistId of uniqueArtistIds) {
-          try {
-            const res = await fetch(
-              `https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist/${artistId}`
-            );
-            const json = await res.json();
-            const a = json.response;
+          const res = await fetch(
+            `https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist/${artistId}`
+          );
+          const json = await res.json();
+          const a = json.response;
 
-            artistMap[artistId] = {
-              id: artistId,
-              name: a.name_text || "Unknown",
-              image: a.image_url_text || "",
-              genre: Array.isArray(a.genre_list_text)
-                ? a.genre_list_text.join(", ")
-                : a.genre_list_text || "Unknown",
-            };
-          } catch (err) {
-            console.error(`Error fetching artist ${artistId}:`, err);
-          }
+          artistMap[artistId] = {
+            id: artistId,
+            name: a.name_text || "Unknown",
+            image: a.image_url_text || "",
+            genre: Array.isArray(a.genre_list_text)
+              ? a.genre_list_text.join(", ")
+              : a.genre_list_text || "Unknown",
+          };
         }
 
         const nodes: ArtistNode[] = Object.values(artistMap);
@@ -70,7 +65,6 @@ export default function Home() {
               artistMap[l.source as string] && artistMap[l.target as string]
           );
 
-        // Count connections per node
         const connectionCount: Record<string, number> = {};
         links.forEach((l) => {
           const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -81,11 +75,11 @@ export default function Home() {
 
         const width = 1200;
         const height = 800;
-        const fixedRadius = 60; // 🔵 Equal size for all nodes
-
+        const baseRadius = 60;
+        const highlightScale = 1.1;
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
-        const genreColorMap: Record<string, string> = {};
 
+        const genreColorMap: Record<string, string> = {};
         nodes.forEach((n) => {
           const primaryGenre = n.genre.split(",")[0].trim();
           if (!genreColorMap[primaryGenre]) {
@@ -109,7 +103,7 @@ export default function Home() {
             .on("zoom", (event: any) => g.attr("transform", event.transform))
         );
 
-        // 🖼️ Define artist image fills
+        // 🖼️ Image fills
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           if (n.image) {
@@ -122,13 +116,13 @@ export default function Home() {
             pattern
               .append("image")
               .attr("href", n.image)
-              .attr("width", fixedRadius * 2)
-              .attr("height", fixedRadius * 2)
+              .attr("width", baseRadius * 2)
+              .attr("height", baseRadius * 2)
               .attr("preserveAspectRatio", "xMidYMid slice");
           }
         });
 
-        // 🔗 Links (color-coded by source artist’s main genre)
+        // 🔗 Links
         const link = g
           .append("g")
           .selectAll("line")
@@ -150,7 +144,7 @@ export default function Home() {
           .data(nodes)
           .enter()
           .append("circle")
-          .attr("r", fixedRadius)
+          .attr("r", baseRadius)
           .attr("fill", (d) => (d.image ? `url(#image-${d.id})` : "#ff6666"))
           .attr("stroke", (d) => {
             const primaryGenre = d.genre.split(",")[0].trim();
@@ -159,7 +153,7 @@ export default function Home() {
           .attr("stroke-width", 4)
           .style("cursor", "pointer");
 
-        // 🧠 Force layout (more space between connections)
+        // 🧠 Genre-separated layout
         const genres = Array.from(
           new Set(nodes.map((n) => n.genre.split(",")[0].trim()))
         );
@@ -179,14 +173,11 @@ export default function Home() {
             d3
               .forceLink<ArtistNode, ArtistLink>(links)
               .id((d) => d.id)
-              .distance(400) // 🔵 Increased distance
+              .distance(450)
               .strength(0.3)
           )
-          .force("charge", d3.forceManyBody().strength(-250))
-          .force(
-            "collision",
-            d3.forceCollide<ArtistNode>(fixedRadius + 10)
-          )
+          .force("charge", d3.forceManyBody().strength(-400))
+          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 30)) // 🧱 larger gap
           .force(
             "x",
             d3
@@ -194,7 +185,7 @@ export default function Home() {
                 (d) =>
                   genrePositions[d.genre.split(",")[0].trim()]?.[0] || width / 2
               )
-              .strength(0.2)
+              .strength(0.3)
           )
           .force(
             "y",
@@ -203,7 +194,7 @@ export default function Home() {
                 (d) =>
                   genrePositions[d.genre.split(",")[0].trim()]?.[1] || height / 2
               )
-              .strength(0.2)
+              .strength(0.3)
           )
           .on("tick", ticked)
           .on("end", freezeLayout);
@@ -225,45 +216,80 @@ export default function Home() {
           });
         }
 
-        // 🧾 Tooltip
-        const tooltip = d3
-          .select("body")
-          .append("div")
-          .style("position", "absolute")
-          .style("background", "rgba(20, 20, 20, 0.95)")
-          .style("color", "#fff")
-          .style("padding", "10px 12px")
-          .style("border-radius", "8px")
-          .style("font-size", "13px")
-          .style("font-family", "Afacad, sans-serif")
-          .style("pointer-events", "none")
-          .style("box-shadow", "0 4px 12px rgba(0,0,0,0.5)")
-          .style("opacity", 0)
-          .style("transition", "opacity 0.2s ease");
+        // 🧠 Highlight logic
+        function highlightNode(selectedNode: ArtistNode) {
+          const connectedIds = new Set<string>();
+          links.forEach((l) => {
+            const s = typeof l.source === "string" ? l.source : l.source.id;
+            const t = typeof l.target === "string" ? l.target : l.target.id;
+            if (s === selectedNode.id || t === selectedNode.id) {
+              connectedIds.add(s);
+              connectedIds.add(t);
+            }
+          });
 
-        node
-          .on("mouseover", (event, d) => {
-            tooltip
-              .html(`
-                <div style="display:flex;align-items:center;gap:10px;">
-                  <img src="${d.image}" width="40" height="40" style="border-radius:50%;object-fit:cover;" />
-                  <div>
-                    <div style="font-weight:600;">${d.name}</div>
-                    <div style="color:#aaa;">${d.genre}</div>
-                    <div style="color:#00aaff;font-size:12px;">Connections: ${
-                      connectionCount[d.id] || 0
-                    }</div>
-                  </div>
-                </div>
-              `)
-              .style("opacity", 1);
-          })
-          .on("mousemove", (event) => {
-            tooltip
-              .style("left", event.pageX + 15 + "px")
-              .style("top", event.pageY - 35 + "px");
-          })
-          .on("mouseout", () => tooltip.style("opacity", 0));
+          node
+            .transition()
+            .duration(200)
+            .attr("r", (d) =>
+              d.id === selectedNode.id || connectedIds.has(d.id)
+                ? baseRadius * highlightScale
+                : baseRadius
+            )
+            .attr("opacity", (d) =>
+              d.id === selectedNode.id || connectedIds.has(d.id) ? 1 : 0.5
+            );
+
+          link
+            .transition()
+            .duration(200)
+            .attr("opacity", (l) =>
+              l.source === selectedNode ||
+              l.target === selectedNode ||
+              connectedIds.has((l.source as ArtistNode).id) ||
+              connectedIds.has((l.target as ArtistNode).id)
+                ? 1
+                : 0.3
+            );
+        }
+
+        function resetHighlight() {
+          node.transition().duration(200).attr("r", baseRadius).attr("opacity", 1);
+          link.transition().duration(200).attr("opacity", 0.8);
+        }
+
+        node.on("click", (_, d) => highlightNode(d));
+
+        // 🔍 Search input
+        const searchInput = d3.select("#searchInput");
+        searchInput.on("input", (event: any) => {
+          const value = event.target.value.toLowerCase().trim();
+          if (!value) {
+            resetHighlight();
+            return;
+          }
+
+          const matchedNodes = nodes.filter(
+            (n) =>
+              n.name.toLowerCase().includes(value) ||
+              n.genre.toLowerCase().includes(value)
+          );
+
+          if (matchedNodes.length > 0) highlightNode(matchedNodes[0]);
+          else resetHighlight();
+        });
+
+        // 🔁 Reset
+        d3.select("#resetBtn").on("click", () => {
+          resetHighlight();
+          svg
+            .transition()
+            .duration(800)
+            .call(
+              (d3.zoom().transform as any),
+              d3.zoomIdentity.translate(0, 0).scale(1)
+            );
+        });
 
         // 🎨 Legend
         const legend = d3
@@ -288,19 +314,6 @@ export default function Home() {
             .style("margin-bottom", "4px")
             .html(
               `<div style="width:12px;height:12px;background:${color};border-radius:50%;"></div> ${genre.toUpperCase()}`
-            );
-        });
-
-        // 🔁 Reset button
-        d3.select("#resetBtn").on("click", () => {
-          node.transition().attr("opacity", 1);
-          link.transition().attr("opacity", 0.8);
-          svg
-            .transition()
-            .duration(800)
-            .call(
-              (d3.zoom().transform as any),
-              d3.zoomIdentity.translate(0, 0).scale(1)
             );
         });
       } catch (err) {
