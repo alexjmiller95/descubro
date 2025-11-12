@@ -26,7 +26,7 @@ export default function Home() {
         );
         const json = await res.json();
         const connections = json.response.results;
-        if (!connections?.length) return console.warn("No artist connections found.");
+        if (!connections?.length) return;
 
         const uniqueArtistIds = Array.from(
           new Set([
@@ -36,15 +36,15 @@ export default function Home() {
         ).filter(Boolean);
 
         const artistMap: Record<string, ArtistNode> = {};
-        for (const artistId of uniqueArtistIds) {
+        for (const id of uniqueArtistIds) {
           const res = await fetch(
-            `https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist/${artistId}`
+            `https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist/${id}`
           );
           const json = await res.json();
           const a = json.response;
 
-          artistMap[artistId] = {
-            id: artistId,
+          artistMap[id] = {
+            id,
             name: a.name_text || "Unknown",
             image: a.image_url_text || "",
             genre: Array.isArray(a.genre_list_text)
@@ -81,18 +81,13 @@ export default function Home() {
 
         const genreColorMap: Record<string, string> = {};
         nodes.forEach((n) => {
-          const primaryGenre = n.genre.split(",")[0].trim();
-          if (!genreColorMap[primaryGenre]) {
-            genreColorMap[primaryGenre] = colorScale(primaryGenre) as string;
-          }
+          const g = n.genre.split(",")[0].trim();
+          if (!genreColorMap[g]) genreColorMap[g] = colorScale(g) as string;
         });
 
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
-        svg
-          .attr("width", width)
-          .attr("height", height)
-          .style("background", "#0b0b0b");
+        svg.attr("width", width).attr("height", height).style("background", "#0b0b0b");
 
         const g = svg.append("g");
 
@@ -106,20 +101,18 @@ export default function Home() {
         // 🖼️ Image fills
         const defs = svg.append("defs");
         nodes.forEach((n) => {
-          if (n.image) {
-            const pattern = defs
-              .append("pattern")
-              .attr("id", `image-${n.id}`)
-              .attr("patternUnits", "objectBoundingBox")
-              .attr("width", 1)
-              .attr("height", 1);
-            pattern
-              .append("image")
-              .attr("href", n.image)
-              .attr("width", baseRadius * 2)
-              .attr("height", baseRadius * 2)
-              .attr("preserveAspectRatio", "xMidYMid slice");
-          }
+          const pattern = defs
+            .append("pattern")
+            .attr("id", `image-${n.id}`)
+            .attr("patternUnits", "objectBoundingBox")
+            .attr("width", 1)
+            .attr("height", 1);
+          pattern
+            .append("image")
+            .attr("href", n.image)
+            .attr("width", baseRadius * 2)
+            .attr("height", baseRadius * 2)
+            .attr("preserveAspectRatio", "xMidYMid slice");
         });
 
         // 🔗 Links
@@ -145,56 +138,42 @@ export default function Home() {
           .enter()
           .append("circle")
           .attr("r", baseRadius)
-          .attr("fill", (d) => (d.image ? `url(#image-${d.id})` : "#ff6666"))
-          .attr("stroke", (d) => {
-            const primaryGenre = d.genre.split(",")[0].trim();
-            return genreColorMap[primaryGenre] || "#ffffff";
-          })
+          .attr("fill", (d) => `url(#image-${d.id})`)
+          .attr("stroke", (d) => genreColorMap[d.genre.split(",")[0].trim()])
           .attr("stroke-width", 4)
           .style("cursor", "pointer");
 
-        // 🧠 Genre-separated layout
-        const genres = Array.from(
-          new Set(nodes.map((n) => n.genre.split(",")[0].trim()))
-        );
+        // 🧠 Cluster separation
+        const genres = Array.from(new Set(nodes.map((n) => n.genre.split(",")[0].trim())));
         const genrePositions: Record<string, [number, number]> = {};
-        const stepX = width / (Math.ceil(Math.sqrt(genres.length)) + 1);
-        const stepY = height / (Math.ceil(Math.sqrt(genres.length)) + 1);
+        const stepX = width / (genres.length + 1);
         genres.forEach((gname, i) => {
-          const col = i % Math.ceil(Math.sqrt(genres.length));
-          const row = Math.floor(i / Math.ceil(Math.sqrt(genres.length)));
-          genrePositions[gname] = [stepX * (col + 1), stepY * (row + 1)];
+          genrePositions[gname] = [stepX * (i + 1), height / 2];
         });
 
         const simulation = d3
           .forceSimulation<ArtistNode>(nodes)
           .force(
             "link",
-            d3
-              .forceLink<ArtistNode, ArtistLink>(links)
-              .id((d) => d.id)
-              .distance(450)
-              .strength(0.3)
+            d3.forceLink<ArtistNode, ArtistLink>(links).id((d) => d.id).distance(500)
           )
-          .force("charge", d3.forceManyBody().strength(-400))
-          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 30)) // 🧱 larger gap
+          .force("charge", d3.forceManyBody().strength(-600))
+          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 40))
           .force(
             "x",
             d3
               .forceX<ArtistNode>(
-                (d) =>
-                  genrePositions[d.genre.split(",")[0].trim()]?.[0] || width / 2
+                (d) => genrePositions[d.genre.split(",")[0].trim()]?.[0] || width / 2
               )
-              .strength(0.3)
+              .strength(0.4)
           )
           .force(
             "y",
             d3
               .forceY<ArtistNode>(
-                (d) =>
-                  genrePositions[d.genre.split(",")[0].trim()]?.[1] || height / 2
+                (d) => genrePositions[d.genre.split(",")[0].trim()]?.[1] || height / 2
               )
-              .strength(0.3)
+              .strength(0.4)
           )
           .on("tick", ticked)
           .on("end", freezeLayout);
@@ -216,8 +195,49 @@ export default function Home() {
           });
         }
 
-        // 🧠 Highlight logic
+        // 🧾 Tooltip
+        const tooltip = d3
+          .select("body")
+          .append("div")
+          .style("position", "absolute")
+          .style("background", "rgba(20, 20, 20, 0.95)")
+          .style("color", "#fff")
+          .style("padding", "10px 12px")
+          .style("border-radius", "8px")
+          .style("font-size", "13px")
+          .style("font-family", "Afacad, sans-serif")
+          .style("pointer-events", "none")
+          .style("box-shadow", "0 4px 12px rgba(0,0,0,0.5)")
+          .style("opacity", 0);
+
+        node
+          .on("mouseover", (event, d) => {
+            tooltip
+              .html(`
+                <strong>${d.name}</strong><br/>
+                ${d.genre}<br/>
+                Connections: ${connectionCount[d.id] || 0}
+              `)
+              .style("opacity", 1);
+          })
+          .on("mousemove", (event) => {
+            tooltip
+              .style("left", event.pageX + 15 + "px")
+              .style("top", event.pageY - 35 + "px");
+          })
+          .on("mouseout", () => tooltip.style("opacity", 0));
+
+        // 🧠 Click highlight toggle
+        let activeNode: ArtistNode | null = null;
+
         function highlightNode(selectedNode: ArtistNode) {
+          if (activeNode && activeNode.id === selectedNode.id) {
+            resetHighlight();
+            activeNode = null;
+            return;
+          }
+
+          activeNode = selectedNode;
           const connectedIds = new Set<string>();
           links.forEach((l) => {
             const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -243,14 +263,11 @@ export default function Home() {
           link
             .transition()
             .duration(200)
-            .attr("opacity", (l) =>
-              l.source === selectedNode ||
-              l.target === selectedNode ||
-              connectedIds.has((l.source as ArtistNode).id) ||
-              connectedIds.has((l.target as ArtistNode).id)
-                ? 1
-                : 0.3
-            );
+            .attr("opacity", (l) => {
+              const s = typeof l.source === "string" ? l.source : (l.source as ArtistNode).id;
+              const t = typeof l.target === "string" ? l.target : (l.target as ArtistNode).id;
+              return s === selectedNode.id || t === selectedNode.id ? 1 : 0.3;
+            });
         }
 
         function resetHighlight() {
@@ -260,7 +277,7 @@ export default function Home() {
 
         node.on("click", (_, d) => highlightNode(d));
 
-        // 🔍 Search input
+        // 🔍 Search
         const searchInput = d3.select("#searchInput");
         searchInput.on("input", (event: any) => {
           const value = event.target.value.toLowerCase().trim();
@@ -269,18 +286,17 @@ export default function Home() {
             return;
           }
 
-          const matchedNodes = nodes.filter(
+          const matched = nodes.filter(
             (n) =>
               n.name.toLowerCase().includes(value) ||
               n.genre.toLowerCase().includes(value)
           );
-
-          if (matchedNodes.length > 0) highlightNode(matchedNodes[0]);
-          else resetHighlight();
+          if (matched.length > 0) highlightNode(matched[0]);
         });
 
         // 🔁 Reset
         d3.select("#resetBtn").on("click", () => {
+          activeNode = null;
           resetHighlight();
           svg
             .transition()
@@ -335,12 +351,11 @@ export default function Home() {
           type="text"
           placeholder="Search artist or genre..."
           className="w-1/2 p-2 rounded-md bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          style={{ fontFamily: "Afacad, sans-serif" }}
         />
         <button
           id="resetBtn"
-          className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-white font-medium"
-          style={{ fontFamily: "Afacad, sans-serif" }}
+          className="px-4 py-2 rounded text-white font-medium"
+          style={{ backgroundColor: "#121212" }}
         >
           Reset View
         </button>
