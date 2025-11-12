@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import * as d3 from "d3";
 
-// 🧩 Define proper types for D3 simulation
+// 🧩 D3 types
 interface ArtistNode extends d3.SimulationNodeDatum {
   id: string;
   name: string;
@@ -91,7 +91,7 @@ export default function Home() {
           return;
         }
 
-        // 5️⃣ Compute connection counts for dynamic sizing (typed)
+        // 5️⃣ Compute connection counts for dynamic sizing
         const connectionCount: Record<string, number> = {};
         links.forEach((l: ArtistLink) => {
           const sourceId = typeof l.source === "string" ? l.source : l.source.id;
@@ -104,9 +104,9 @@ export default function Home() {
         const radiusScale = d3
           .scaleSqrt()
           .domain([1, maxConnections])
-          .range([15, 35]); // 🟢 Halved base size from previous 30–70
+          .range([15, 35]); // 🟢 Halved base size
 
-        // 6️⃣ Set up SVG
+        // 6️⃣ Setup SVG
         const width = 1000;
         const height = 700;
 
@@ -117,9 +117,8 @@ export default function Home() {
           .attr("height", height)
           .style("background", "#0b0b0b");
 
-        // 7️⃣ Define image patterns
+        // 7️⃣ Image patterns
         const defs = svg.append("defs");
-
         nodes.forEach((n) => {
           if (n.image) {
             const pattern = defs
@@ -149,7 +148,7 @@ export default function Home() {
           .append("line")
           .attr("stroke-width", (d) => Math.sqrt(d.strength));
 
-        // 9️⃣ Nodes (with dynamic size and image)
+        // 9️⃣ Nodes
         const node = svg
           .append("g")
           .selectAll("circle")
@@ -168,7 +167,7 @@ export default function Home() {
               .on("end", dragended)
           );
 
-        // 🔟 Tooltip (artist + genre)
+        // 🔟 Tooltip
         const tooltip = d3
           .select("body")
           .append("div")
@@ -194,7 +193,7 @@ export default function Home() {
           })
           .on("mouseout", () => tooltip.style("opacity", 0));
 
-        // 1️⃣1️⃣ Labels (positioned above node)
+        // 1️⃣1️⃣ Labels
         const label = svg
           .append("g")
           .selectAll("text")
@@ -206,9 +205,9 @@ export default function Home() {
           .attr("font-size", 11)
           .attr("font-family", "Afacad, sans-serif")
           .attr("text-anchor", "middle")
-          .attr("dy", -radiusScale(2) - 6);
+          .attr("dy", (d) => -(radiusScale(connectionCount[d.id] || 1) + 6));
 
-        // 1️⃣2️⃣ Force simulation with collision detection 🧠
+        // 1️⃣2️⃣ Force simulation
         const simulation = d3
           .forceSimulation<ArtistNode>(nodes)
           .force(
@@ -224,7 +223,7 @@ export default function Home() {
           .force(
             "collision",
             d3.forceCollide<ArtistNode>().radius((d) => radiusScale(connectionCount[d.id] || 1) + 6)
-          ) // Prevent overlap
+          )
           .on("tick", ticked);
 
         function ticked() {
@@ -238,17 +237,43 @@ export default function Home() {
           label.attr("x", (d) => d.x || 0).attr("y", (d) => (d.y || 0) - (radiusScale(connectionCount[d.id] || 1) + 8));
         }
 
+        // 1️⃣3️⃣ Search functionality
+        const input = document.getElementById("searchInput") as HTMLInputElement;
+
+        input?.addEventListener("input", () => {
+          const query = input.value.toLowerCase();
+
+          node
+            .transition()
+            .duration(300)
+            .attr("opacity", (d) => (d.name.toLowerCase().includes(query) ? 1 : 0.1))
+            .attr("stroke-width", (d) => (d.name.toLowerCase().includes(query) ? 3 : 1.5));
+
+          label
+            .transition()
+            .duration(300)
+            .attr("opacity", (d) => (d.name.toLowerCase().includes(query) ? 1 : 0.15));
+
+          link
+            .transition()
+            .duration(300)
+            .attr("opacity", (d) => {
+              const src = (d.source as ArtistNode).name.toLowerCase();
+              const tgt = (d.target as ArtistNode).name.toLowerCase();
+              return src.includes(query) || tgt.includes(query) ? 0.8 : 0.1;
+            });
+        });
+
+        // 🧩 Drag logic
         function dragstarted(event: any, d: ArtistNode) {
           if (!event.active) simulation.alphaTarget(0.3).restart();
           d.fx = d.x;
           d.fy = d.y;
         }
-
         function dragged(event: any, d: ArtistNode) {
           d.fx = event.x;
           d.fy = event.y;
         }
-
         function dragended(event: any, d: ArtistNode) {
           if (!event.active) simulation.alphaTarget(0);
           d.fx = null;
@@ -263,7 +288,13 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-black">
+    <div className="flex flex-col items-center min-h-screen bg-black text-white p-6 space-y-4">
+      <input
+        id="searchInput"
+        type="text"
+        placeholder="Search for an artist..."
+        className="w-1/2 p-2 rounded-md bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
       <svg ref={svgRef}></svg>
     </div>
   );
