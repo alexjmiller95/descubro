@@ -21,39 +21,45 @@ export default function Home() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const res = await fetch(
-          "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection"
-        );
-        const json = await res.json();
-        const connections = json.response.results;
-        if (!connections?.length) return;
+        console.log("🎧 Fetching all artists & connections...");
 
-        const uniqueArtistIds = Array.from(
-          new Set([
-            ...connections.map((c: any) => c.artist_11_custom_artist),
-            ...connections.map((c: any) => c.artist_21_custom_artist),
-          ])
-        ).filter(Boolean);
+        // ✅ Fetch ALL Artists and ALL Connections globally
+        const [artistsRes, connectionsRes] = await Promise.all([
+          fetch(
+            "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist?limit=1000"
+          ),
+          fetch(
+            "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=1000"
+          ),
+        ]);
 
+        const [artistsJson, connectionsJson] = await Promise.all([
+          artistsRes.json(),
+          connectionsRes.json(),
+        ]);
+
+        const artists = artistsJson.response?.results || [];
+        const connections = connectionsJson.response?.results || [];
+
+        if (!artists.length || !connections.length) {
+          console.warn("⚠️ No artists or connections found");
+          return;
+        }
+
+        // 🧭 Create quick lookup
         const artistMap: Record<string, ArtistNode> = {};
-        for (const id of uniqueArtistIds) {
-          const res = await fetch(
-            `https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist/${id}`
-          );
-          const json = await res.json();
-          const a = json.response;
-
-          artistMap[id] = {
-            id,
+        artists.forEach((a: any) => {
+          artistMap[a._id] = {
+            id: a._id,
             name: a.name_text || "Unknown",
             image: a.image_url_text || "",
             genre: Array.isArray(a.genre_list_text)
               ? a.genre_list_text.join(", ")
               : a.genre_list_text || "Unknown",
           };
-        }
+        });
 
-        const nodes: ArtistNode[] = Object.values(artistMap);
+        // 🔗 Build links from all ArtistConnections
         const links: ArtistLink[] = connections
           .map((c: any) => ({
             source: c.artist_11_custom_artist,
@@ -64,6 +70,8 @@ export default function Home() {
             (l: ArtistLink) =>
               artistMap[l.source as string] && artistMap[l.target as string]
           );
+
+        const nodes: ArtistNode[] = Object.values(artistMap);
 
         const connectionCount: Record<string, number> = {};
         links.forEach((l) => {
@@ -76,7 +84,7 @@ export default function Home() {
         // ✨ Layout constants
         const width = 1400;
         const height = 900;
-        const baseRadius = 120; // doubled size
+        const baseRadius = 120;
         const highlightScale = 1.1;
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
 
@@ -86,10 +94,13 @@ export default function Home() {
           if (!genreColorMap[g]) genreColorMap[g] = colorScale(g) as string;
         });
 
-        // SVG setup
+        // 🧱 SVG setup
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
-        svg.attr("width", width).attr("height", height).style("background", "#0b0b0b");
+        svg
+          .attr("width", width)
+          .attr("height", height)
+          .style("background", "#0b0b0b");
 
         const g = svg.append("g");
 
@@ -146,14 +157,16 @@ export default function Home() {
           .style("cursor", "pointer");
 
         // 🧠 Genre-separated grid layout
-        const genres = Array.from(new Set(nodes.map((n) => n.genre.split(",")[0].trim())));
+        const genres = Array.from(
+          new Set(nodes.map((n) => n.genre.split(",")[0].trim()))
+        );
         const genrePositions: Record<string, [number, number]> = {};
         const stepX = width / (genres.length + 1);
         genres.forEach((gname, i) => {
           genrePositions[gname] = [stepX * (i + 1), height / 2];
         });
 
-        // 🧩 Force simulation
+        // ⚡ Force simulation
         const simulation = d3
           .forceSimulation<ArtistNode>(nodes)
           .force(
@@ -161,10 +174,10 @@ export default function Home() {
             d3
               .forceLink<ArtistNode, ArtistLink>(links)
               .id((d) => d.id)
-              .distance(900) // doubled distance
+              .distance(900)
           )
           .force("charge", d3.forceManyBody().strength(-1000))
-          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 80)) // strong separation
+          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 80))
           .force(
             "x",
             d3
@@ -273,8 +286,10 @@ export default function Home() {
             .transition()
             .duration(200)
             .attr("opacity", (l) => {
-              const s = typeof l.source === "string" ? l.source : (l.source as ArtistNode).id;
-              const t = typeof l.target === "string" ? l.target : (l.target as ArtistNode).id;
+              const s =
+                typeof l.source === "string" ? l.source : (l.source as ArtistNode).id;
+              const t =
+                typeof l.target === "string" ? l.target : (l.target as ArtistNode).id;
               return s === selectedNode.id || t === selectedNode.id ? 1 : 0.3;
             });
         }
@@ -344,7 +359,7 @@ export default function Home() {
             );
         });
       } catch (err) {
-        console.error("Error fetching Bubble data:", err);
+        console.error("❌ Error fetching Bubble data:", err);
       }
     }
 
@@ -360,7 +375,7 @@ export default function Home() {
         <input
           id="searchInput"
           type="text"
-          placeholder="Search artist or genre..."
+          placeholder="search artist or genre..."
           className="w-1/2 p-2 rounded-md bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
         <button
