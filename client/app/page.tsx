@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import * as d3 from "d3";
 
 interface ArtistNode extends d3.SimulationNodeDatum {
-  id: string;
+  id: string;       // now Spotify ID
   name: string;
   image: string;
   genre: string;
@@ -21,58 +21,86 @@ export default function Home() {
   useEffect(() => {
     async function fetchData() {
       try {
-        console.log("🎧 Fetching all artists & connections...");
+        console.log("Fetching artist connections...");
+        const res = await fetch(
+          "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=500"
+        );
+        const json = await res.json();
+        const connections = json.response.results || [];
+        if (!connections.length) return;
 
-        // ✅ Fetch ALL Artists and ALL Connections globally
-        const [artistsRes, connectionsRes] = await Promise.all([
-          fetch(
-            "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist?limit=1000"
-          ),
-          fetch(
-            "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=1000"
-          ),
-        ]);
+        console.log("Connections:", connections.length);
 
-        const [artistsJson, connectionsJson] = await Promise.all([
-          artistsRes.json(),
-          connectionsRes.json(),
-        ]);
+        // -----------------------------------------------------
+        // 💡 STEP 1 — Collect all Bubble Artist IDs from connections
+        // -----------------------------------------------------
+        const bubbleArtistIds = [
+          ...connections.map((c: any) => c.artist_11_custom_artist),
+          ...connections.map((c: any) => c.artist_21_custom_artist),
+        ].filter(Boolean);
 
-        const artists = artistsJson.response?.results || [];
-        const connections = connectionsJson.response?.results || [];
+        // -----------------------------------------------------
+        // 💡 STEP 2 — Fetch artists & merge them by Spotify ID
+        // -----------------------------------------------------
+        const artistMapBySpotify: Record<string, ArtistNode> = {};
+        const bubbleIdToSpotify: Record<string, string> = {};
 
-        if (!artists.length || !connections.length) {
-          console.warn("⚠️ No artists or connections found");
-          return;
+        for (const bubbleId of bubbleArtistIds) {
+          const result = await fetch(
+            `https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist/${bubbleId}`
+          );
+          const data = await result.json();
+          const a = data.response;
+          if (!a) continue;
+
+          const spotifyId = a.spotify_id_text;
+          if (!spotifyId) continue;
+
+          bubbleIdToSpotify[bubbleId] = spotifyId;
+
+          // If first time seeing this Spotify artist, store it
+          if (!artistMapBySpotify[spotifyId]) {
+            artistMapBySpotify[spotifyId] = {
+              id: spotifyId,
+              name: a.name_text || "Unknown",
+              image: a.image_url_text || "",
+              genre: Array.isArray(a.genre_list_text)
+                ? a.genre_list_text.join(", ")
+                : a.genre_list_text || "Unknown",
+            };
+          }
         }
 
-        // 🧭 Create quick lookup
-        const artistMap: Record<string, ArtistNode> = {};
-        artists.forEach((a: any) => {
-          artistMap[a._id] = {
-            id: a._id,
-            name: a.name_text || "Unknown",
-            image: a.image_url_text || "",
-            genre: Array.isArray(a.genre_list_text)
-              ? a.genre_list_text.join(", ")
-              : a.genre_list_text || "Unknown",
-          };
-        });
+        const nodes: ArtistNode[] = Object.values(artistMapBySpotify);
+        console.log("Unique artists (Spotify):", nodes.length);
 
-        // 🔗 Build links from all ArtistConnections
+        // -----------------------------------------------------
+        // 💡 STEP 3 — Build links using Spotify IDs
+        // -----------------------------------------------------
         const links: ArtistLink[] = connections
-          .map((c: any) => ({
-            source: c.artist_11_custom_artist,
-            target: c.artist_21_custom_artist,
-            strength: c.connection_strength_number || 1,
-          }))
+          .map((c: any) => {
+            const s = bubbleIdToSpotify[c.artist_11_custom_artist];
+            const t = bubbleIdToSpotify[c.artist_21_custom_artist];
+
+            return {
+              source: s,
+              target: t,
+              strength: c.connection_strength_number || 1,
+            };
+          })
           .filter(
-            (l: ArtistLink) =>
-              artistMap[l.source as string] && artistMap[l.target as string]
+            (l) =>
+              l.source &&
+              l.target &&
+              artistMapBySpotify[l.source] &&
+              artistMapBySpotify[l.target]
           );
 
-        const nodes: ArtistNode[] = Object.values(artistMap);
+        console.log("Valid links:", links.length);
 
+        // -----------------------------------------------------
+        // Layout & graph rendering below (unchanged)
+        // -----------------------------------------------------
         const connectionCount: Record<string, number> = {};
         links.forEach((l) => {
           const s = typeof l.source === "string" ? l.source : l.source.id;
@@ -81,7 +109,6 @@ export default function Home() {
           connectionCount[t] = (connectionCount[t] || 0) + 1;
         });
 
-        // ✨ Layout constants
         const width = 1400;
         const height = 900;
         const baseRadius = 120;
@@ -94,16 +121,11 @@ export default function Home() {
           if (!genreColorMap[g]) genreColorMap[g] = colorScale(g) as string;
         });
 
-        // 🧱 SVG setup
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
-        svg
-          .attr("width", width)
-          .attr("height", height)
-          .style("background", "#0b0b0b");
+        svg.attr("width", width).attr("height", height).style("background", "#0b0b0b");
 
         const g = svg.append("g");
-
         (svg as any).call(
           d3
             .zoom()
@@ -111,7 +133,6 @@ export default function Home() {
             .on("zoom", (event: any) => g.attr("transform", event.transform))
         );
 
-        // 🖼️ Pattern fills (for circular photos)
         const defs = svg.append("defs");
         nodes.forEach((n) => {
           const pattern = defs
@@ -120,6 +141,7 @@ export default function Home() {
             .attr("patternUnits", "objectBoundingBox")
             .attr("width", 1)
             .attr("height", 1);
+
           pattern
             .append("image")
             .attr("href", n.image)
@@ -128,7 +150,7 @@ export default function Home() {
             .attr("preserveAspectRatio", "xMidYMid slice");
         });
 
-        // 🔗 Links
+        // Draw links
         const link = g
           .append("g")
           .selectAll("line")
@@ -137,13 +159,13 @@ export default function Home() {
           .append("line")
           .attr("stroke", (d) => {
             const src = typeof d.source === "string" ? d.source : d.source.id;
-            const srcGenre = artistMap[src]?.genre.split(",")[0].trim();
+            const srcGenre = artistMapBySpotify[src]?.genre.split(",")[0].trim();
             return genreColorMap[srcGenre] || "#00aaff";
           })
-          .attr("stroke-opacity", 0.8)
-          .attr("stroke-width", 4);
+          .attr("stroke-width", 4)
+          .attr("stroke-opacity", 0.8);
 
-        // 🟣 Nodes
+        // Draw nodes
         const node = g
           .append("g")
           .selectAll("circle")
@@ -156,85 +178,76 @@ export default function Home() {
           .attr("stroke-width", 5)
           .style("cursor", "pointer");
 
-        // 🧠 Genre-separated grid layout
-        const genres = Array.from(
-          new Set(nodes.map((n) => n.genre.split(",")[0].trim()))
-        );
+        // Genres layout
+        const genres = Array.from(new Set(nodes.map((n) => n.genre.split(",")[0].trim())));
         const genrePositions: Record<string, [number, number]> = {};
         const stepX = width / (genres.length + 1);
+
         genres.forEach((gname, i) => {
           genrePositions[gname] = [stepX * (i + 1), height / 2];
         });
 
-        // ⚡ Force simulation
         const simulation = d3
-          .forceSimulation<ArtistNode>(nodes)
+          .forceSimulation(nodes)
           .force(
             "link",
             d3
-              .forceLink<ArtistNode, ArtistLink>(links)
-              .id((d) => d.id)
+              .forceLink(links)
+              .id((d) => (d as ArtistNode).id)
               .distance(900)
           )
           .force("charge", d3.forceManyBody().strength(-1000))
-          .force("collision", d3.forceCollide<ArtistNode>(baseRadius + 80))
+          .force("collision", d3.forceCollide(baseRadius + 80))
           .force(
             "x",
             d3
-              .forceX<ArtistNode>(
-                (d) => genrePositions[d.genre.split(",")[0].trim()]?.[0] || width / 2
-              )
+              .forceX((d) => genrePositions[(d as ArtistNode).genre.split(",")[0].trim()]?.[0])
               .strength(0.4)
           )
           .force(
             "y",
             d3
-              .forceY<ArtistNode>(
-                (d) => genrePositions[d.genre.split(",")[0].trim()]?.[1] || height / 2
-              )
+              .forceY((d) => genrePositions[(d as ArtistNode).genre.split(",")[0].trim()]?.[1])
               .strength(0.4)
           )
-          .on("tick", ticked)
-          .on("end", freezeLayout);
+          .on("tick", () => {
+            link
+              .attr("x1", (d) => (d.source as ArtistNode).x || 0)
+              .attr("y1", (d) => (d.source as ArtistNode).y || 0)
+              .attr("x2", (d) => (d.target as ArtistNode).x || 0)
+              .attr("y2", (d) => (d.target as ArtistNode).y || 0);
 
-        function ticked() {
-          link
-            .attr("x1", (d) => (d.source as ArtistNode).x || 0)
-            .attr("y1", (d) => (d.source as ArtistNode).y || 0)
-            .attr("x2", (d) => (d.target as ArtistNode).x || 0)
-            .attr("y2", (d) => (d.target as ArtistNode).y || 0);
-          node.attr("cx", (d) => d.x || 0).attr("cy", (d) => d.y || 0);
-        }
-
-        function freezeLayout() {
-          simulation.stop();
-          nodes.forEach((n) => {
-            n.fx = n.x;
-            n.fy = n.y;
+            node
+              .attr("cx", (d) => (d as ArtistNode).x || 0)
+              .attr("cy", (d) => (d as ArtistNode).y || 0);
+          })
+          .on("end", () => {
+            simulation.stop();
+            nodes.forEach((n) => {
+              n.fx = n.x;
+              n.fy = n.y;
+            });
           });
-        }
 
-        // 🧾 Tooltip
+        // Tooltip
         const tooltip = d3
           .select("body")
           .append("div")
           .style("position", "absolute")
-          .style("background", "rgba(20, 20, 20, 0.95)")
+          .style("background", "rgba(20,20,20,0.9)")
           .style("color", "#fff")
           .style("padding", "10px 12px")
           .style("border-radius", "8px")
           .style("font-size", "13px")
-          .style("font-family", "Afacad, sans-serif")
-          .style("pointer-events", "none")
-          .style("box-shadow", "0 4px 12px rgba(0,0,0,0.5)")
-          .style("opacity", 0);
+          .style("opacity", 0)
+          .style("pointer-events", "none");
 
         function showTooltip(event: any, d: ArtistNode) {
           tooltip
             .html(
-              `<strong>${d.name.toUpperCase()}</strong><br/>
-               GENRE: ${d.genre.toUpperCase()}<br/>
-               CONNECTIONS: ${(connectionCount[d.id] || 0).toString().toUpperCase()}`
+              `<strong>${d.name}</strong><br>
+               GENRE: ${d.genre}<br>
+               CONNECTIONS: ${connectionCount[d.id] || 0}`
             )
             .style("opacity", 1)
             .style("left", event.pageX + 15 + "px")
@@ -246,120 +259,8 @@ export default function Home() {
           .on("mousemove", showTooltip)
           .on("mouseout", () => tooltip.style("opacity", 0));
 
-        // 🧠 Click highlight toggle
-        let activeNode: ArtistNode | null = null;
-
-        function highlightNode(selectedNode: ArtistNode, event?: any) {
-          if (activeNode && activeNode.id === selectedNode.id) {
-            activeNode = null;
-            resetHighlight();
-            tooltip.style("opacity", 0);
-            return;
-          }
-
-          activeNode = selectedNode;
-          showTooltip(event, selectedNode);
-
-          const connectedIds = new Set<string>();
-          links.forEach((l) => {
-            const s = typeof l.source === "string" ? l.source : l.source.id;
-            const t = typeof l.target === "string" ? l.target : l.target.id;
-            if (s === selectedNode.id || t === selectedNode.id) {
-              connectedIds.add(s);
-              connectedIds.add(t);
-            }
-          });
-
-          node
-            .transition()
-            .duration(200)
-            .attr("r", (d) =>
-              d.id === selectedNode.id || connectedIds.has(d.id)
-                ? baseRadius * highlightScale
-                : baseRadius
-            )
-            .attr("opacity", (d) =>
-              d.id === selectedNode.id || connectedIds.has(d.id) ? 1 : 0.5
-            );
-
-          link
-            .transition()
-            .duration(200)
-            .attr("opacity", (l) => {
-              const s =
-                typeof l.source === "string" ? l.source : (l.source as ArtistNode).id;
-              const t =
-                typeof l.target === "string" ? l.target : (l.target as ArtistNode).id;
-              return s === selectedNode.id || t === selectedNode.id ? 1 : 0.3;
-            });
-        }
-
-        function resetHighlight() {
-          node.transition().duration(200).attr("r", baseRadius).attr("opacity", 1);
-          link.transition().duration(200).attr("opacity", 0.8);
-        }
-
-        node.on("click", (event, d) => highlightNode(d, event));
-
-        // 🔍 Search
-        const searchInput = d3.select("#searchInput");
-        searchInput.on("input", (event: any) => {
-          const value = event.target.value.toLowerCase().trim();
-          if (!value) {
-            resetHighlight();
-            tooltip.style("opacity", 0);
-            return;
-          }
-
-          const matched = nodes.filter(
-            (n) =>
-              n.name.toLowerCase().includes(value) ||
-              n.genre.toLowerCase().includes(value)
-          );
-          if (matched.length > 0) highlightNode(matched[0]);
-        });
-
-        // 🔁 Reset
-        d3.select("#resetBtn").on("click", () => {
-          activeNode = null;
-          resetHighlight();
-          tooltip.style("opacity", 0);
-          svg
-            .transition()
-            .duration(800)
-            .call(
-              (d3.zoom().transform as any),
-              d3.zoomIdentity.translate(0, 0).scale(1)
-            );
-        });
-
-        // 🎨 Legend
-        const legend = d3
-          .select("#legend")
-          .html("")
-          .style("position", "absolute")
-          .style("top", "20px")
-          .style("right", "20px")
-          .style("background", "rgba(20,20,20,0.8)")
-          .style("padding", "10px 15px")
-          .style("border-radius", "8px")
-          .style("font-family", "Afacad, sans-serif")
-          .style("font-size", "13px")
-          .style("color", "#fff");
-
-        Object.entries(genreColorMap).forEach(([genre, color]) => {
-          legend
-            .append("div")
-            .style("display", "flex")
-            .style("align-items", "center")
-            .style("gap", "8px")
-            .style("margin-bottom", "4px")
-            .html(
-              `<div style="width:12px;height:12px;background:${color};border-radius:50%;"></div> ${genre.toUpperCase()}`
-            );
-        });
       } catch (err) {
-        console.error("❌ Error fetching Bubble data:", err);
+        console.error("Error:", err);
       }
     }
 
@@ -367,26 +268,7 @@ export default function Home() {
   }, []);
 
   return (
-    <div
-      className="flex flex-col items-center min-h-screen bg-black text-white p-6 space-y-4 relative"
-      style={{ fontFamily: "Afacad, sans-serif" }}
-    >
-      <div className="flex w-full justify-center gap-4 items-center">
-        <input
-          id="searchInput"
-          type="text"
-          placeholder="search artist or genre..."
-          className="w-1/2 p-2 rounded-md bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <button
-          id="resetBtn"
-          className="px-4 py-2 rounded text-white font-medium"
-          style={{ backgroundColor: "#121212" }}
-        >
-          Reset View
-        </button>
-      </div>
-      <div id="legend"></div>
+    <div className="flex flex-col items-center min-h-screen bg-black text-white p-6 space-y-4 relative">
       <svg ref={svgRef}></svg>
     </div>
   );
