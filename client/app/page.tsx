@@ -30,8 +30,9 @@ export interface Link
    ============================================================ */
 
 const NODE_RADIUS = 20; // 50% smaller
-const LINE_WIDTH = 2;   // thicker lines
+const LINE_WIDTH = 2;   // main + soft link thickness
 const GENRE_FALLBACK_COLOR = "#888888";
+const SOFT_LINK_COLOR = "#888888";
 
 const ARTIST_API =
   "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist?limit=500";
@@ -47,21 +48,24 @@ export default function Page() {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const minimapRef = useRef<SVGSVGElement | null>(null);
 
-  // For search + legend UI
+  // Search + legend state
   const [searchTerm, setSearchTerm] = useState("");
   const [activeGenre, setActiveGenre] = useState<string | null>(null);
   const [legendItems, setLegendItems] = useState<LegendItem[]>([]);
 
-  // D3 selections saved for filtering
+  // D3 selections for reactive filtering
   const nodeSelRef = useRef<
     d3.Selection<SVGCircleElement, ArtistRecord, SVGGElement, unknown> | null
   >(null);
   const linkSelRef = useRef<
     d3.Selection<SVGLineElement, Link, SVGGElement, unknown> | null
   >(null);
+  const softLinkSelRef = useRef<
+    d3.Selection<SVGLineElement, Link, SVGGElement, unknown> | null
+  >(null);
 
   /* ------------------------------------------------------------
-      EFFECT 1 — FETCH + BUILD GRAPH (runs once)
+      EFFECT 1 — FETCH + BUILD GRAPH
      ------------------------------------------------------------ */
   useEffect(() => {
     async function run() {
@@ -123,7 +127,7 @@ export default function Page() {
         };
       });
 
-      // ---------- 2. Build links by shared primary genre ----------
+      // ---------- 2. Build STRONG links by shared primary genre ----------
       const primaryGenres = nodes.map((n) =>
         (n.genre[0] ?? "unknown").toLowerCase()
       );
@@ -181,7 +185,45 @@ export default function Page() {
         }
       });
 
-      // ---------- 3. Setup SVGs ----------
+      // ---------- 3. Build SOFT links (keyword-based genre similarity) ----------
+      const softLinks: Link[] = [];
+
+      const linkKey = (a: string, b: string) =>
+        a < b ? `${a}__${b}` : `${b}__${a}`;
+
+      const existingStrongKeys = new Set<string>(
+        links.map((l) => linkKey(l.sourceId, l.targetId))
+      );
+
+      function hasKeywordOverlap(g1: string, g2: string) {
+        const a = g1.toLowerCase().split(/\s+/).filter(Boolean);
+        const b = g2.toLowerCase().split(/\s+/).filter(Boolean);
+        return a.some((word) => b.includes(word));
+      }
+
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const g1 = (nodes[i].genre[0] ?? "").toLowerCase();
+          const g2 = (nodes[j].genre[0] ?? "").toLowerCase();
+          if (!g1 || !g2) continue;
+          // Only consider if primary genres differ but share keyword
+          if (g1 === g2) continue;
+          if (!hasKeywordOverlap(g1, g2)) continue;
+
+          const key = linkKey(nodes[i].id, nodes[j].id);
+          if (existingStrongKeys.has(key)) continue; // skip if already strong
+
+          softLinks.push({
+            source: nodes[i].id,
+            target: nodes[j].id,
+            sourceId: nodes[i].id,
+            targetId: nodes[j].id,
+            genre: "soft-related",
+          });
+        }
+      }
+
+      // ---------- 4. Setup SVGs ----------
       const svg = d3.select(svgRef.current);
       const minimapSvg = d3.select(minimapRef.current);
       svg.selectAll("*").remove();
@@ -205,7 +247,7 @@ export default function Page() {
       const mainG = svg.append("g");
       const minimapG = minimapSvg.append("g");
 
-      // ---------- 4. Tooltip ----------
+      // ---------- 5. Tooltip ----------
       const tooltip = d3
         .select("body")
         .append("div")
@@ -219,7 +261,7 @@ export default function Page() {
         .style("pointer-events", "none")
         .style("opacity", 0);
 
-      // ---------- 5. Image patterns ----------
+      // ---------- 6. Image patterns ----------
       const defs = mainG.append("defs");
       nodes.forEach((n) => {
         if (!n.image) return;
@@ -238,7 +280,7 @@ export default function Page() {
           .attr("preserveAspectRatio", "xMidYMid slice");
       });
 
-      // ---------- 6. Links ----------
+      // ---------- 7. Strong Links ----------
       const linkSel = mainG
         .append("g")
         .attr("stroke-linecap", "round")
@@ -250,6 +292,20 @@ export default function Page() {
         .attr("stroke", (d) => genreColor[d.genre] ?? GENRE_FALLBACK_COLOR)
         .attr("stroke-opacity", 0.7);
 
+      // ---------- 8. Soft Links (dotted, grey) ----------
+      const softLinkSel = mainG
+        .append("g")
+        .attr("stroke-linecap", "round")
+        .selectAll("line")
+        .data(softLinks)
+        .enter()
+        .append("line")
+        .attr("stroke-width", LINE_WIDTH)
+        .attr("stroke", SOFT_LINK_COLOR)
+        .attr("stroke-dasharray", "4 4")
+        .attr("stroke-opacity", 0.5);
+
+      // ---------- 9. Minimap links ----------
       const miniLinks = minimapG
         .append("g")
         .selectAll("line")
@@ -260,7 +316,18 @@ export default function Page() {
         .attr("stroke", (d) => genreColor[d.genre] ?? "#555")
         .attr("stroke-opacity", 0.7);
 
-      // ---------- 7. Nodes ----------
+      const miniSoftLinks = minimapG
+        .append("g")
+        .selectAll("line")
+        .data(softLinks)
+        .enter()
+        .append("line")
+        .attr("stroke-width", 0.8)
+        .attr("stroke", SOFT_LINK_COLOR)
+        .attr("stroke-dasharray", "3 3")
+        .attr("stroke-opacity", 0.4);
+
+      // ---------- 10. Nodes ----------
       const nodeSel = mainG
         .append("g")
         .selectAll("circle")
@@ -289,11 +356,12 @@ export default function Page() {
         .attr("stroke", "#111")
         .attr("stroke-width", 1);
 
-      // Save selections for filtering effect
+      // Save refs for filtering
       nodeSelRef.current = nodeSel;
       linkSelRef.current = linkSel;
+      softLinkSelRef.current = softLinkSel;
 
-      // ---------- 8. Hover behaviour ----------
+      // ---------- 11. Hover behaviour ----------
       nodeSel
         .on("mouseover", function (event, d) {
           d3.select(this)
@@ -323,7 +391,7 @@ export default function Page() {
           tooltip.style("opacity", 0);
         });
 
-      // ---------- 9. Minimap viewport ----------
+      // ---------- 12. Minimap viewport ----------
       const viewportRect = minimapSvg
         .append("rect")
         .attr("fill", "none")
@@ -367,7 +435,7 @@ export default function Page() {
           .call(zoomBehavior.transform as any, newTransform);
       });
 
-      // ---------- 10. Zoom + pan ----------
+      // ---------- 13. Zoom + pan ----------
       const zoomBehavior = d3
         .zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.3, 5])
@@ -380,7 +448,7 @@ export default function Page() {
       svg.call(zoomBehavior as any);
       updateMinimapViewport();
 
-      // ---------- 11. Force simulation with genre clustering ----------
+      // ---------- 14. Force simulation with genre clustering ----------
       const simulation = d3
         .forceSimulation<ArtistRecord>(nodes)
         .force(
@@ -432,6 +500,28 @@ export default function Page() {
                 : 0
             );
 
+          softLinkSel
+            .attr("x1", (d) =>
+              typeof d.source !== "string"
+                ? d.source.x ?? 0
+                : 0
+            )
+            .attr("y1", (d) =>
+              typeof d.source !== "string"
+                ? d.source.y ?? 0
+                : 0
+            )
+            .attr("x2", (d) =>
+              typeof d.target !== "string"
+                ? d.target.x ?? 0
+                : 0
+            )
+            .attr("y2", (d) =>
+              typeof d.target !== "string"
+                ? d.target.y ?? 0
+                : 0
+            );
+
           nodeSel
             .attr("cx", (d) => d.x ?? 0)
             .attr("cy", (d) => d.y ?? 0);
@@ -458,12 +548,34 @@ export default function Page() {
                 : 0
             );
 
+          miniSoftLinks
+            .attr("x1", (d) =>
+              typeof d.source !== "string"
+                ? (d.source.x ?? 0) * scaleX
+                : 0
+            )
+            .attr("y1", (d) =>
+              typeof d.source !== "string"
+                ? (d.source.y ?? 0) * scaleY
+                : 0
+            )
+            .attr("x2", (d) =>
+              typeof d.target !== "string"
+                ? (d.target.x ?? 0) * scaleX
+                : 0
+            )
+            .attr("y2", (d) =>
+              typeof d.target !== "string"
+                ? (d.target.y ?? 0) * scaleY
+                : 0
+            );
+
           miniNodes
             .attr("cx", (d) => (d.x ?? 0) * scaleX)
             .attr("cy", (d) => (d.y ?? 0) * scaleY);
         });
 
-      // ---------- 12. Cleanup ----------
+      // ---------- 15. Cleanup ----------
       return () => {
         tooltip.remove();
         simulation.stop();
@@ -471,6 +583,7 @@ export default function Page() {
         minimapSvg.on("click", null);
         nodeSelRef.current = null;
         linkSelRef.current = null;
+        softLinkSelRef.current = null;
       };
     }
 
@@ -478,12 +591,13 @@ export default function Page() {
   }, []);
 
   /* ------------------------------------------------------------
-      EFFECT 2 — SEARCH & GENRE FILTER (reactive to UI)
+      EFFECT 2 — SEARCH & GENRE FILTER (applies to nodes + links)
      ------------------------------------------------------------ */
   useEffect(() => {
     const nodeSel = nodeSelRef.current;
     const linkSel = linkSelRef.current;
-    if (!nodeSel || !linkSel) return;
+    const softLinkSel = softLinkSelRef.current;
+    if (!nodeSel || !linkSel || !softLinkSel) return;
 
     const term = searchTerm.trim().toLowerCase();
     const genreFilter = activeGenre ? activeGenre.toLowerCase() : null;
@@ -523,6 +637,22 @@ export default function Page() {
             ? l.target
             : (l.target as ArtistRecord).id;
         return visibleIds.has(sId) && visibleIds.has(tId) ? 0.9 : 0.05;
+      });
+
+    // Soft links respect the same filtering rules (Option A)
+    softLinkSel
+      .transition()
+      .duration(200)
+      .attr("stroke-opacity", (l) => {
+        const sId =
+          typeof l.source === "string"
+            ? l.source
+            : (l.source as ArtistRecord).id;
+        const tId =
+          typeof l.target === "string"
+            ? l.target
+            : (l.target as ArtistRecord).id;
+        return visibleIds.has(sId) && visibleIds.has(tId) ? 0.5 : 0.05;
       });
   }, [searchTerm, activeGenre]);
 
