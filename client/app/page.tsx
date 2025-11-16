@@ -1,11 +1,9 @@
 "use client";
+
 import { useEffect, useRef } from "react";
 import * as d3 from "d3";
 
-// ============================
-// Types
-// ============================
-
+// ===== Bubble types =====
 interface BubbleArtist {
   id: string; // Bubble internal ID
   id_text: string; // Spotify ID
@@ -14,23 +12,17 @@ interface BubbleArtist {
   genre_list_text: string[];
 }
 
-interface BubbleConnection {
-  artist_1_custom_artist: string; // Bubble Artist ID
-  artist_2_custom_artist: string; // Bubble Artist ID
-  connection_strength_number: number;
+interface BubbleConnectionRaw {
+  id: string;
+  [key: string]: any; // we don't know the fields yet – this is what we're debugging
 }
 
+// ===== Graph types =====
 interface ArtistNode extends d3.SimulationNodeDatum {
   id: string;
   name: string;
   image: string;
   genre: string;
-}
-
-interface ArtistLink extends d3.SimulationLinkDatum<ArtistNode> {
-  source: string;
-  target: string;
-  strength: number;
 }
 
 export default function Home() {
@@ -40,7 +32,7 @@ export default function Home() {
     async function loadGraph() {
       try {
         // ============================
-        // 1) FETCH ALL ARTISTS
+        // 1) FETCH ARTISTS
         // ============================
         console.log("Fetching Artists…");
 
@@ -52,36 +44,36 @@ export default function Home() {
         const artistsRaw: BubbleArtist[] = jsonArtists.response?.results || [];
         console.log("Received Artists:", artistsRaw.length);
 
-        if (artistsRaw.length === 0) return;
+        if (!artistsRaw.length) {
+          console.warn("No artists returned – check Bubble privacy rules.");
+          return;
+        }
 
-        // Build lookup: BubbleID → SpotifyID
-        const bubbleToSpotify: Record<string, string> = {};
-        const spotifyToArtist: Record<string, ArtistNode> = {};
+        // Map Bubble artist → node
+        const nodesMap: Record<string, ArtistNode> = {};
 
-        artistsRaw.forEach((a) => {
-          const bubbleId = a.id;
-          const spotifyId = a.id_text ?? bubbleId;
+        artistsRaw.forEach((a: BubbleArtist) => {
+          const spotifyId = a.id_text || a.id; // fallback to Bubble ID
+          if (!spotifyId) return;
 
-          bubbleToSpotify[bubbleId] = spotifyId;
-
-          if (!spotifyToArtist[spotifyId]) {
-            spotifyToArtist[spotifyId] = {
+          if (!nodesMap[spotifyId]) {
+            nodesMap[spotifyId] = {
               id: spotifyId,
-              name: a.name_text || "Unknown",
+              name: a.name_text || "UNKNOWN",
               image: a.image_url_text || "",
               genre:
-                Array.isArray(a.genre_list_text)
+                Array.isArray(a.genre_list_text) && a.genre_list_text.length
                   ? a.genre_list_text.join(", ")
-                  : "Unknown",
+                  : "UNKNOWN",
             };
           }
         });
 
-        const nodes: ArtistNode[] = Object.values(spotifyToArtist);
+        const nodes: ArtistNode[] = Object.values(nodesMap);
         console.log("Unique Spotify artists (nodes):", nodes.length);
 
         // ============================
-        // 2) FETCH CONNECTIONS
+        // 2) FETCH ARTIST CONNECTIONS (DEBUG)
         // ============================
         console.log("Fetching ArtistConnections…");
 
@@ -90,52 +82,24 @@ export default function Home() {
         );
         const jsonConnections = await resConnections.json();
 
-        const connections: BubbleConnection[] =
+        const connections: BubbleConnectionRaw[] =
           jsonConnections.response?.results || [];
-
         console.log("Received ArtistConnections:", connections.length);
 
-        // ============================
-        // 3) BUILD LINKS
-        // ============================
-        let rawLinks: ArtistLink[] = [];
+        // 🔥 KEY DEBUG LINE:
+        console.log("SAMPLE ARTISTCONNECTION RAW OBJECT:", connections[0]);
 
-        connections.forEach((c) => {
-          const b1 = c.artist_1_custom_artist;
-          const b2 = c.artist_2_custom_artist;
-
-          if (!b1 || !b2) return;
-
-          const s = bubbleToSpotify[b1];
-          const t = bubbleToSpotify[b2];
-
-          if (!s || !t || s === t) return;
-          if (!spotifyToArtist[s] || !spotifyToArtist[t]) return;
-
-          rawLinks.push({
-            source: s,
-            target: t,
-            strength: c.connection_strength_number ?? 1,
-          });
-        });
-
-        // Deduplicate links
-        const linkMap = new Map<string, ArtistLink>();
-        rawLinks.forEach((l) => {
-          const key = l.source < l.target ? `${l.source}__${l.target}` : `${l.target}__${l.source}`;
-          if (!linkMap.has(key)) linkMap.set(key, l);
-        });
-
-        const links = Array.from(linkMap.values());
-        console.log("Unique links:", links.length);
+        // NOTE: For now we are NOT building links from connections.
+        // This file is only to inspect what fields ArtistConnection actually has.
+        // Once we see the structure in the console, we can wire up the real links.
 
         // ============================
-        // 4) RENDER THE GRAPH
+        // 3) RENDER NODES ONLY (NO LINKS YET)
         // ============================
 
         const width = 1400;
         const height = 900;
-        const baseRadius = 120;
+        const baseRadius = 240; // 100% bigger than original 120
 
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
@@ -143,7 +107,7 @@ export default function Home() {
 
         const g = svg.append("g");
 
-        // Zoom
+        // Zoom / pan
         (svg as any).call(
           d3.zoom().scaleExtent([0.3, 3]).on("zoom", (event: any) => {
             g.attr("transform", event.transform);
@@ -167,17 +131,6 @@ export default function Home() {
             .attr("preserveAspectRatio", "xMidYMid slice");
         });
 
-        // Links
-        const link = g
-          .append("g")
-          .selectAll("line")
-          .data(links)
-          .enter()
-          .append("line")
-          .attr("stroke", "#666")
-          .attr("stroke-width", 3)
-          .attr("stroke-opacity", 0.7);
-
         // Nodes
         const node = g
           .append("g")
@@ -190,23 +143,17 @@ export default function Home() {
           .attr("stroke", "#fff")
           .attr("stroke-width", 5);
 
-        // Simulation
-        const simulation = d3
+        // Simple force layout to spread nodes
+        d3
           .forceSimulation(nodes)
-          .force("link", d3.forceLink(links).id((d: any) => d.id).distance(900))
-          .force("charge", d3.forceManyBody().strength(-1200))
-          .force("collision", d3.forceCollide(baseRadius + 80))
+          .force("charge", d3.forceManyBody().strength(-1500))
+          .force("collision", d3.forceCollide(baseRadius + 40))
+          .force("center", d3.forceCenter(width / 2, height / 2))
           .on("tick", () => {
-            link
-              .attr("x1", (d: any) => d.source.x)
-              .attr("y1", (d: any) => d.source.y)
-              .attr("x2", (d: any) => d.target.x)
-              .attr("y2", (d: any) => d.target.y);
-
             node.attr("cx", (d: any) => d.x).attr("cy", (d: any) => d.y);
           });
       } catch (e) {
-        console.error(e);
+        console.error("Error loading graph:", e);
       }
     }
 
