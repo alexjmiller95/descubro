@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
 import type { SimulationNodeDatum } from "d3";
 
@@ -30,11 +30,14 @@ export interface Link
    ============================================================ */
 
 const NODE_RADIUS = 20; // 50% smaller
-const LINE_WIDTH = 2;   // 2x thicker than default
+const LINE_WIDTH = 2;   // thicker lines
 const GENRE_FALLBACK_COLOR = "#888888";
 
 const ARTIST_API =
   "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist?limit=500";
+
+/* For legend UI */
+type LegendItem = { genre: string; color: string };
 
 /* ============================================================
    COMPONENT
@@ -44,8 +47,21 @@ export default function Page() {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const minimapRef = useRef<SVGSVGElement | null>(null);
 
+  // For search + legend UI
+  const [searchTerm, setSearchTerm] = useState("");
+  const [activeGenre, setActiveGenre] = useState<string | null>(null);
+  const [legendItems, setLegendItems] = useState<LegendItem[]>([]);
+
+  // D3 selections saved for filtering
+  const nodeSelRef = useRef<
+    d3.Selection<SVGCircleElement, ArtistRecord, SVGGElement, unknown> | null
+  >(null);
+  const linkSelRef = useRef<
+    d3.Selection<SVGLineElement, Link, SVGGElement, unknown> | null
+  >(null);
+
   /* ------------------------------------------------------------
-      MAIN EFFECT – fetch + draw
+      EFFECT 1 — FETCH + BUILD GRAPH (runs once)
      ------------------------------------------------------------ */
   useEffect(() => {
     async function run() {
@@ -120,11 +136,20 @@ export default function Page() {
       const genreColor: Record<string, string> = {};
       uniqueGenres.forEach((g) => (genreColor[g] = colorScale(g)));
 
-      const bandStep =
-        (typeof window !== "undefined"
-          ? window.innerWidth
-          : 1400) /
-        (uniqueGenres.length + 1);
+      // Save for legend UI
+      setLegendItems(
+        uniqueGenres.map((g) => ({
+          genre: g,
+          color: genreColor[g] ?? GENRE_FALLBACK_COLOR,
+        }))
+      );
+
+      const width =
+        typeof window !== "undefined" ? window.innerWidth : 1400;
+      const height =
+        typeof window !== "undefined" ? window.innerHeight : 900;
+
+      const bandStep = width / (uniqueGenres.length + 1);
       const genreCenterX: Record<string, number> = {};
       uniqueGenres.forEach((g, i) => {
         genreCenterX[g] = bandStep * (i + 1);
@@ -162,11 +187,6 @@ export default function Page() {
       svg.selectAll("*").remove();
       minimapSvg.selectAll("*").remove();
 
-      const width =
-        typeof window !== "undefined" ? window.innerWidth : 1400;
-      const height =
-        typeof window !== "undefined" ? window.innerHeight : 900;
-
       const minimapWidth = 220;
       const minimapHeight = 220;
       const scaleX = minimapWidth / width;
@@ -199,7 +219,7 @@ export default function Page() {
         .style("pointer-events", "none")
         .style("opacity", 0);
 
-      // ---------- 5. Image patterns (perfect circular portraits) ----------
+      // ---------- 5. Image patterns ----------
       const defs = mainG.append("defs");
       nodes.forEach((n) => {
         if (!n.image) return;
@@ -218,22 +238,7 @@ export default function Page() {
           .attr("preserveAspectRatio", "xMidYMid slice");
       });
 
-      // ---------- 6. Adjacency + connection counts ----------
-      const neighbors = new Map<string, Set<string>>();
-      const connectionCount: Record<string, number> = {};
-      links.forEach((l) => {
-        const s = l.sourceId;
-        const t = l.targetId;
-        if (!neighbors.has(s)) neighbors.set(s, new Set());
-        if (!neighbors.has(t)) neighbors.set(t, new Set());
-        neighbors.get(s)!.add(t);
-        neighbors.get(t)!.add(s);
-
-        connectionCount[s] = (connectionCount[s] || 0) + 1;
-        connectionCount[t] = (connectionCount[t] || 0) + 1;
-      });
-
-      // ---------- 7. Links (main + minimap) ----------
+      // ---------- 6. Links ----------
       const linkSel = mainG
         .append("g")
         .attr("stroke-linecap", "round")
@@ -255,7 +260,7 @@ export default function Page() {
         .attr("stroke", (d) => genreColor[d.genre] ?? "#555")
         .attr("stroke-opacity", 0.7);
 
-      // ---------- 8. Nodes (main + minimap) ----------
+      // ---------- 7. Nodes ----------
       const nodeSel = mainG
         .append("g")
         .selectAll("circle")
@@ -284,59 +289,23 @@ export default function Page() {
         .attr("stroke", "#111")
         .attr("stroke-width", 1);
 
-      // ---------- 9. Hover animation ----------
-      function highlightHover(d: ArtistRecord | null) {
-        if (!d) {
-          nodeSel
-            .transition()
-            .duration(150)
-            .attr("r", NODE_RADIUS)
-            .attr("opacity", 1)
-            .attr("stroke-width", 2);
+      // Save selections for filtering effect
+      nodeSelRef.current = nodeSel;
+      linkSelRef.current = linkSel;
 
-          linkSel
-            .transition()
-            .duration(150)
-            .attr("stroke-opacity", 0.7);
-          return;
-        }
-
-        const neigh = neighbors.get(d.id) ?? new Set<string>();
-
-        nodeSel
-          .transition()
-          .duration(150)
-          .attr("r", (n) =>
-            n.id === d.id || neigh.has(n.id)
-              ? NODE_RADIUS * 1.3
-              : NODE_RADIUS * 0.9
-          )
-          .attr("opacity", (n) =>
-            n.id === d.id || neigh.has(n.id) ? 1 : 0.3
-          )
-          .attr("stroke-width", (n) =>
-            n.id === d.id ? 3 : 2
-          );
-
-        linkSel
-          .transition()
-          .duration(150)
-          .attr("stroke-opacity", (l) =>
-            l.sourceId === d.id || l.targetId === d.id ? 1 : 0.2
-          );
-      }
-
+      // ---------- 8. Hover behaviour ----------
       nodeSel
         .on("mouseover", function (event, d) {
-          highlightHover(d);
+          d3.select(this)
+            .transition()
+            .duration(150)
+            .attr("r", NODE_RADIUS * 1.3);
+
           tooltip
             .style("opacity", 1)
             .html(
               `<strong>${d.name.toUpperCase()}</strong><br/>
-               GENRES: ${d.genre.join(", ").toUpperCase()}<br/>
-               CONNECTIONS: ${(connectionCount[d.id] || 0)
-                 .toString()
-                 .toUpperCase()}`
+               GENRES: ${d.genre.join(", ").toUpperCase()}`
             )
             .style("left", event.pageX + 14 + "px")
             .style("top", event.pageY + 14 + "px");
@@ -347,11 +316,14 @@ export default function Page() {
             .style("top", event.pageY + 14 + "px");
         })
         .on("mouseout", function () {
+          d3.select(this)
+            .transition()
+            .duration(150)
+            .attr("r", NODE_RADIUS);
           tooltip.style("opacity", 0);
-          highlightHover(null);
         });
 
-      // ---------- 10. Minimap viewport rectangle ----------
+      // ---------- 9. Minimap viewport ----------
       const viewportRect = minimapSvg
         .append("rect")
         .attr("fill", "none")
@@ -361,7 +333,7 @@ export default function Page() {
 
       let currentTransform = d3.zoomIdentity;
 
-      function updateMinimapViewport() {
+      const updateMinimapViewport = () => {
         const k = currentTransform.k;
         const tx = currentTransform.x;
         const ty = currentTransform.y;
@@ -376,9 +348,9 @@ export default function Page() {
           .attr("y", y0 * scaleY)
           .attr("width", (x1 - x0) * scaleX)
           .attr("height", (y1 - y0) * scaleY);
-      }
+      };
 
-      // click minimap to re-center
+      // click minimap to centre
       minimapSvg.on("click", (event) => {
         const [mx, my] = d3.pointer(event);
         const targetX = mx / scaleX;
@@ -395,7 +367,7 @@ export default function Page() {
           .call(zoomBehavior.transform as any, newTransform);
       });
 
-      // ---------- 11. Zoom + pan ----------
+      // ---------- 10. Zoom + pan ----------
       const zoomBehavior = d3
         .zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.3, 5])
@@ -408,7 +380,7 @@ export default function Page() {
       svg.call(zoomBehavior as any);
       updateMinimapViewport();
 
-      // ---------- 12. Force simulation with genre clustering ----------
+      // ---------- 11. Force simulation with genre clustering ----------
       const simulation = d3
         .forceSimulation<ArtistRecord>(nodes)
         .force(
@@ -491,24 +463,190 @@ export default function Page() {
             .attr("cy", (d) => (d.y ?? 0) * scaleY);
         });
 
-      // ---------- 13. Cleanup ----------
+      // ---------- 12. Cleanup ----------
       return () => {
         tooltip.remove();
         simulation.stop();
         svg.on(".zoom", null);
-        minimapSvg.on(".click", null);
+        minimapSvg.on("click", null);
+        nodeSelRef.current = null;
+        linkSelRef.current = null;
       };
     }
 
     run();
   }, []);
 
-  /* ------- React legend (simple) -------- */
-  // (Legend colours won’t be perfect until after data loads,
-  //  but it’s good enough and doesn’t affect the graph.)
+  /* ------------------------------------------------------------
+      EFFECT 2 — SEARCH & GENRE FILTER (reactive to UI)
+     ------------------------------------------------------------ */
+  useEffect(() => {
+    const nodeSel = nodeSelRef.current;
+    const linkSel = linkSelRef.current;
+    if (!nodeSel || !linkSel) return;
+
+    const term = searchTerm.trim().toLowerCase();
+    const genreFilter = activeGenre ? activeGenre.toLowerCase() : null;
+
+    const visibleIds = new Set<string>();
+
+    nodeSel
+      .transition()
+      .duration(200)
+      .attr("opacity", (d) => {
+        const matchesName = d.name.toLowerCase().includes(term);
+        const matchesGenreText = d.genre.some((g) =>
+          g.toLowerCase().includes(term)
+        );
+        const matchesSearch =
+          term === "" || matchesName || matchesGenreText;
+
+        const primary = (d.genre[0] ?? "unknown").toLowerCase();
+        const matchesLegend =
+          !genreFilter || primary === genreFilter;
+
+        const visible = matchesSearch && matchesLegend;
+        if (visible) visibleIds.add(d.id);
+        return visible ? 1 : 0.15;
+      });
+
+    linkSel
+      .transition()
+      .duration(200)
+      .attr("stroke-opacity", (l) => {
+        const sId =
+          typeof l.source === "string"
+            ? l.source
+            : (l.source as ArtistRecord).id;
+        const tId =
+          typeof l.target === "string"
+            ? l.target
+            : (l.target as ArtistRecord).id;
+        return visibleIds.has(sId) && visibleIds.has(tId) ? 0.9 : 0.05;
+      });
+  }, [searchTerm, activeGenre]);
+
+  /* ============================================================
+      JSX UI: Search bar + legend + SVGs
+     ============================================================ */
 
   return (
     <div>
+      {/* SEARCH BAR */}
+      <div
+        style={{
+          position: "fixed",
+          top: 16,
+          left: "50%",
+          transform: "translateX(-50%)",
+          zIndex: 10,
+          background: "rgba(0,0,0,0.7)",
+          padding: "10px 14px",
+          borderRadius: 8,
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          color: "white",
+          fontFamily: "Afacad, sans-serif",
+        }}
+      >
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search artist or genre…"
+          style={{
+            padding: "8px 10px",
+            borderRadius: 6,
+            border: "none",
+            width: 260,
+            outline: "none",
+            background: "#222",
+            color: "white",
+            fontFamily: "Afacad, sans-serif",
+          }}
+        />
+
+        <button
+          onClick={() => {
+            setSearchTerm("");
+            setActiveGenre(null);
+          }}
+          style={{
+            padding: "8px 10px",
+            borderRadius: 6,
+            background: "#444",
+            color: "white",
+            border: "none",
+            cursor: "pointer",
+            fontFamily: "Afacad, sans-serif",
+          }}
+        >
+          Reset
+        </button>
+      </div>
+
+      {/* LEGEND */}
+      <div
+        style={{
+          position: "fixed",
+          top: 70,
+          right: 16,
+          zIndex: 10,
+          padding: 12,
+          background: "rgba(0,0,0,0.75)",
+          borderRadius: 8,
+          color: "#ffffff",
+          fontFamily: "Afacad, sans-serif",
+          fontSize: 12,
+          width: 190,
+          maxHeight: "60vh",
+          overflowY: "auto",
+        }}
+      >
+        <strong>GENRES</strong>
+
+        <div style={{ marginTop: 10 }}>
+          {legendItems.map((item) => {
+            const g = item.genre;
+            const lower = g.toLowerCase();
+            const active = activeGenre === lower;
+            return (
+              <div
+                key={g}
+                onClick={() =>
+                  setActiveGenre((prev) =>
+                    prev === lower ? null : lower
+                  )
+                }
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 6,
+                  cursor: "pointer",
+                  opacity:
+                    activeGenre && !active
+                      ? 0.4
+                      : 1,
+                }}
+              >
+                <div
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: item.color,
+                  }}
+                />
+                <span>{g.toUpperCase()}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* MAIN SVG + MINIMAP */}
       <svg ref={svgRef} />
       <svg
         ref={minimapRef}
@@ -520,25 +658,6 @@ export default function Page() {
           overflow: "hidden",
         }}
       />
-      <div
-        style={{
-          position: "fixed",
-          top: 16,
-          right: 16,
-          padding: 12,
-          background: "rgba(0,0,0,0.75)",
-          borderRadius: 8,
-          color: "#ffffff",
-          fontFamily: "Afacad, sans-serif",
-          fontSize: 12,
-        }}
-      >
-        <strong>GENRES</strong>
-        <div style={{ marginTop: 6 }}>
-          {/* The legend uses a simple placeholder; you can refine if needed */}
-          <div>COLOURS FOLLOW PRIMARY GENRES</div>
-        </div>
-      </div>
     </div>
   );
 }
