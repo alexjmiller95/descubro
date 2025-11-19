@@ -9,7 +9,7 @@ import type { SimulationNodeDatum } from "d3";
    ============================================================ */
 
 export interface ArtistRecord extends SimulationNodeDatum {
-  id: string; // Bubble _id (used for links)
+  id: string; // this will be Artist.artist_id (Spotify ID)
   name: string;
   genre: string[];
   image: string | null;
@@ -23,6 +23,7 @@ export interface Link
   sourceId: string;
   targetId: string;
   genre: string;
+  strength?: number;
 }
 
 /* ============================================================
@@ -30,7 +31,7 @@ export interface Link
    ============================================================ */
 
 const NODE_RADIUS = 20; // 50% smaller
-const LINE_WIDTH = 2; // main + soft link thickness
+const LINE_WIDTH = 2; // thicker lines than before
 const GENRE_FALLBACK_COLOR = "#888888";
 const SOFT_LINK_COLOR = "#888888";
 
@@ -40,7 +41,6 @@ const ARTIST_API =
 const ARTIST_CONNECTION_API =
   "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=2000";
 
-/* For legend UI */
 type LegendItem = { genre: string; color: string };
 
 /* ============================================================
@@ -51,12 +51,10 @@ export default function Page() {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const minimapRef = useRef<SVGSVGElement | null>(null);
 
-  // Search + legend state
   const [searchTerm, setSearchTerm] = useState("");
   const [activeGenre, setActiveGenre] = useState<string | null>(null);
   const [legendItems, setLegendItems] = useState<LegendItem[]>([]);
 
-  // D3 selections for reactive filtering
   const nodeSelRef = useRef<
     d3.Selection<SVGCircleElement, ArtistRecord, SVGGElement, unknown> | null
   >(null);
@@ -71,7 +69,9 @@ export default function Page() {
       EFFECT 1 — FETCH + BUILD GRAPH
      ------------------------------------------------------------ */
   useEffect(() => {
-    async function run() {
+    let destroy: (() => void) | undefined;
+
+    (async () => {
       if (!svgRef.current || !minimapRef.current) return;
 
       // ---------- 1. Fetch Artists + ArtistConnections ----------
@@ -108,13 +108,10 @@ export default function Page() {
         connectionsRaw = jsonConnections.response?.results ?? [];
 
         console.log("Received Artists:", artistsRaw.length);
-        console.log("Received ArtistConnections:", connectionsRaw.length);
-        if (connectionsRaw.length > 0) {
-          console.log(
-            "Sample ArtistConnection object:",
-            connectionsRaw[0]
-          );
-        }
+        console.log(
+          "Received ArtistConnections:",
+          connectionsRaw.length
+        );
       } catch (err) {
         console.error("Failed to fetch data from Bubble:", err);
         return;
@@ -127,12 +124,13 @@ export default function Page() {
 
       // ---------- 2. Map Bubble Artist objects → nodes ----------
       const nodes: ArtistRecord[] = artistsRaw.map((a: any) => {
-        // Use Bubble internal _id as graph ID so it matches ArtistConnection references
+        // use artist_id (Spotify) as our graph id
         const id: string =
-          a._id ||
+          a.artist_id_text ||
+          a.artist_id ||
           a.spotify_id_text ||
           a.spotify_id ||
-          a.artist_id ||
+          a._id ||
           String(Math.random());
 
         const name: string =
@@ -162,7 +160,6 @@ export default function Page() {
         };
       });
 
-      // Index for quick lookup
       const nodeById: Record<string, ArtistRecord> = {};
       nodes.forEach((n) => {
         nodeById[n.id] = n;
@@ -181,7 +178,6 @@ export default function Page() {
       const genreColor: Record<string, string> = {};
       uniqueGenres.forEach((g) => (genreColor[g] = colorScale(g)));
 
-      // Save for legend UI
       setLegendItems(
         uniqueGenres.map((g) => ({
           genre: g,
@@ -206,76 +202,28 @@ export default function Page() {
         a < b ? `${a}__${b}` : `${b}__${a}`;
       const existingStrongKeys = new Set<string>();
 
-      let loggedConnectionShape = false;
-
       connectionsRaw.forEach((c: any) => {
-        const keys = Object.keys(c);
-
-        // Find fields whose name starts with "artist_1" / "artist_2"
-        const artist1Key = keys.find((k) =>
-          k.toLowerCase().startsWith("artist_1")
-        );
-        const artist2Key = keys.find((k) =>
-          k.toLowerCase().startsWith("artist_2")
-        );
-
-        if (!loggedConnectionShape) {
-          console.log("Connection keys:", keys);
-          console.log(
-            "Detected artist1Key:",
-            artist1Key,
-            "artist2Key:",
-            artist2Key
-          );
-          if (artist1Key) {
-            console.log("artist_1 raw value:", c[artist1Key]);
-          }
-          if (artist2Key) {
-            console.log("artist_2 raw value:", c[artist2Key]);
-          }
-          loggedConnectionShape = true;
-        }
-
-        if (!artist1Key || !artist2Key) {
-          // If we can't even find the keys, skip
-          return;
-        }
-
-        const rawSource = c[artist1Key];
-        const rawTarget = c[artist2Key];
-
-        const extractId = (val: any): string | null => {
-          if (!val) return null;
-          if (typeof val === "string") return val;
-          if (typeof val === "object") {
-            // Try common nested patterns
-            if (val._id) return String(val._id);
-            if (val.id) return String(val.id);
-            // Fallback: take first property value
-            const v = Object.values(val)[0];
-            return v ? String(v) : null;
-          }
-          return String(val);
-        };
-
-        const sourceId = extractId(rawSource);
-        const targetId = extractId(rawTarget);
+        // your new workflow saves these as text fields => *_text
+        const sourceId: string | undefined =
+          c.artist_1_id_text || c.artist_1_id;
+        const targetId: string | undefined =
+          c.artist_2_id_text || c.artist_2_id;
 
         if (!sourceId || !targetId) return;
-
-        if (!nodeById[sourceId] || !nodeById[targetId]) {
-          // IDs not in our artist list; skip
-          return;
-        }
+        if (!nodeById[sourceId] || !nodeById[targetId]) return;
 
         const key = strongKey(sourceId, targetId);
         if (existingStrongKeys.has(key)) return;
         existingStrongKeys.add(key);
 
-        const genreValue =
-          (Array.isArray(c.genre_list_text) && c.genre_list_text[0]) ||
+        const genreValue: string =
+          (Array.isArray(c.genre_list_text) &&
+            c.genre_list_text[0]) ||
           c.genre_text ||
           "unknown";
+
+        const strength: number =
+          c.connection_strength_number ?? 1;
 
         links.push({
           source: sourceId,
@@ -283,6 +231,7 @@ export default function Page() {
           sourceId,
           targetId,
           genre: String(genreValue).toLowerCase(),
+          strength,
         });
       });
 
@@ -305,11 +254,11 @@ export default function Page() {
           const g1 = (nodes[i].genre[0] ?? "").toLowerCase();
           const g2 = (nodes[j].genre[0] ?? "").toLowerCase();
           if (!g1 || !g2) continue;
-          if (g1 === g2) continue; // already same-genre; rely on strong links
+          if (g1 === g2) continue;
           if (!hasKeywordOverlap(g1, g2)) continue;
 
           const key = strongKey(nodes[i].id, nodes[j].id);
-          if (existingStrongKeys.has(key)) continue; // skip if already strong
+          if (existingStrongKeys.has(key)) continue;
 
           softLinks.push({
             source: nodes[i].id,
@@ -388,9 +337,11 @@ export default function Page() {
         .data(links)
         .enter()
         .append("line")
-        .attr("stroke-width", LINE_WIDTH)
+        .attr("stroke-width", (d) =>
+          Math.max(LINE_WIDTH, (d.strength ?? 1) * (LINE_WIDTH / 1.5))
+        )
         .attr("stroke", (d) => genreColor[d.genre] ?? GENRE_FALLBACK_COLOR)
-        .attr("stroke-opacity", 0.7);
+        .attr("stroke-opacity", 0.8);
 
       // ---------- 10. Soft Links (dotted, grey) ----------
       const softLinkSel = mainG
@@ -456,7 +407,6 @@ export default function Page() {
         .attr("stroke", "#111")
         .attr("stroke-width", 1);
 
-      // Save refs for filtering
       nodeSelRef.current = nodeSel;
       linkSelRef.current = linkSel;
       softLinkSelRef.current = softLinkSel;
@@ -518,6 +468,18 @@ export default function Page() {
           .attr("height", (y1 - y0) * scaleY);
       };
 
+      let zoomBehavior = d3
+        .zoom<SVGSVGElement, unknown>()
+        .scaleExtent([0.3, 5])
+        .on("zoom", (event) => {
+          currentTransform = event.transform;
+          mainG.attr("transform", currentTransform.toString());
+          updateMinimapViewport();
+        });
+
+      svg.call(zoomBehavior as any);
+      updateMinimapViewport();
+
       // click minimap to centre
       minimapSvg.on("click", (event) => {
         const [mx, my] = d3.pointer(event);
@@ -535,20 +497,7 @@ export default function Page() {
           .call(zoomBehavior.transform as any, newTransform);
       });
 
-      // ---------- 15. Zoom + pan ----------
-      const zoomBehavior = d3
-        .zoom<SVGSVGElement, unknown>()
-        .scaleExtent([0.3, 5])
-        .on("zoom", (event) => {
-          currentTransform = event.transform;
-          mainG.attr("transform", currentTransform.toString());
-          updateMinimapViewport();
-        });
-
-      svg.call(zoomBehavior as any);
-      updateMinimapViewport();
-
-      // ---------- 16. Force simulation with genre clustering ----------
+      // ---------- 15. Force simulation ----------
       const simulation = d3
         .forceSimulation<ArtistRecord>(nodes)
         .force(
@@ -675,8 +624,8 @@ export default function Page() {
             .attr("cy", (d) => (d.y ?? 0) * scaleY);
         });
 
-      // ---------- 17. Cleanup ----------
-      return () => {
+      // ---------- 16. Cleanup ----------
+      destroy = () => {
         tooltip.remove();
         simulation.stop();
         svg.on(".zoom", null);
@@ -685,13 +634,15 @@ export default function Page() {
         linkSelRef.current = null;
         softLinkSelRef.current = null;
       };
-    }
+    })();
 
-    run();
+    return () => {
+      if (destroy) destroy();
+    };
   }, []);
 
   /* ------------------------------------------------------------
-      EFFECT 2 — SEARCH & GENRE FILTER (applies to nodes + links)
+      EFFECT 2 — SEARCH & GENRE FILTER
      ------------------------------------------------------------ */
   useEffect(() => {
     const nodeSel = nodeSelRef.current;
@@ -739,7 +690,6 @@ export default function Page() {
         return visibleIds.has(sId) && visibleIds.has(tId) ? 0.9 : 0.05;
       });
 
-    // Soft links respect the same filtering rules (Option A)
     softLinkSel
       .transition()
       .duration(200)
@@ -757,7 +707,7 @@ export default function Page() {
   }, [searchTerm, activeGenre]);
 
   /* ============================================================
-      JSX UI: Search bar + legend + SVGs
+      JSX UI
      ============================================================ */
 
   return (
@@ -856,9 +806,7 @@ export default function Page() {
                   marginBottom: 6,
                   cursor: "pointer",
                   opacity:
-                    activeGenre && !active
-                      ? 0.4
-                      : 1,
+                    activeGenre && !active ? 0.4 : 1,
                 }}
               >
                 <div
