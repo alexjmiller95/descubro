@@ -9,7 +9,7 @@ import type { SimulationNodeDatum } from "d3";
    ============================================================ */
 
 export interface ArtistRecord extends SimulationNodeDatum {
-  id: string;            // Bubble _id (used for links)
+  id: string; // Bubble _id (used for links)
   name: string;
   genre: string[];
   image: string | null;
@@ -30,7 +30,7 @@ export interface Link
    ============================================================ */
 
 const NODE_RADIUS = 20; // 50% smaller
-const LINE_WIDTH = 2;   // main + soft link thickness
+const LINE_WIDTH = 2; // main + soft link thickness
 const GENRE_FALLBACK_COLOR = "#888888";
 const SOFT_LINK_COLOR = "#888888";
 
@@ -74,7 +74,7 @@ export default function Page() {
     async function run() {
       if (!svgRef.current || !minimapRef.current) return;
 
-      // ---------- 1. Fetch Artists + ArtistConnections in parallel ----------
+      // ---------- 1. Fetch Artists + ArtistConnections ----------
       let artistsRaw: any[] = [];
       let connectionsRaw: any[] = [];
 
@@ -206,24 +206,67 @@ export default function Page() {
         a < b ? `${a}__${b}` : `${b}__${a}`;
       const existingStrongKeys = new Set<string>();
 
+      let loggedConnectionShape = false;
+
       connectionsRaw.forEach((c: any) => {
-        // Bubble Data API name: artist_1_custom_artist / artist_2_custom_artist
-        const rawA1 =
-          c.artist_1_custom_artist ||
-          c.artist_1 ||
-          c["artist_1 (Artist)"];
-        const rawA2 =
-          c.artist_2_custom_artist ||
-          c.artist_2 ||
-          c["artist_2 (Artist)"];
+        const keys = Object.keys(c);
 
-        if (!rawA1 || !rawA2) return;
+        // Find fields whose name starts with "artist_1" / "artist_2"
+        const artist1Key = keys.find((k) =>
+          k.toLowerCase().startsWith("artist_1")
+        );
+        const artist2Key = keys.find((k) =>
+          k.toLowerCase().startsWith("artist_2")
+        );
 
-        const sourceId = String(rawA1);
-        const targetId = String(rawA2);
+        if (!loggedConnectionShape) {
+          console.log("Connection keys:", keys);
+          console.log(
+            "Detected artist1Key:",
+            artist1Key,
+            "artist2Key:",
+            artist2Key
+          );
+          if (artist1Key) {
+            console.log("artist_1 raw value:", c[artist1Key]);
+          }
+          if (artist2Key) {
+            console.log("artist_2 raw value:", c[artist2Key]);
+          }
+          loggedConnectionShape = true;
+        }
 
-        // Only create link when BOTH artists exist in our node list
-        if (!nodeById[sourceId] || !nodeById[targetId]) return;
+        if (!artist1Key || !artist2Key) {
+          // If we can't even find the keys, skip
+          return;
+        }
+
+        const rawSource = c[artist1Key];
+        const rawTarget = c[artist2Key];
+
+        const extractId = (val: any): string | null => {
+          if (!val) return null;
+          if (typeof val === "string") return val;
+          if (typeof val === "object") {
+            // Try common nested patterns
+            if (val._id) return String(val._id);
+            if (val.id) return String(val.id);
+            // Fallback: take first property value
+            const v = Object.values(val)[0];
+            return v ? String(v) : null;
+          }
+          return String(val);
+        };
+
+        const sourceId = extractId(rawSource);
+        const targetId = extractId(rawTarget);
+
+        if (!sourceId || !targetId) return;
+
+        if (!nodeById[sourceId] || !nodeById[targetId]) {
+          // IDs not in our artist list; skip
+          return;
+        }
 
         const key = strongKey(sourceId, targetId);
         if (existingStrongKeys.has(key)) return;
@@ -243,7 +286,10 @@ export default function Page() {
         });
       });
 
-      console.log("Built strong links from ArtistConnection:", links.length);
+      console.log(
+        "Built strong links from ArtistConnection:",
+        links.length
+      );
 
       // ---------- 5. SOFT links (keyword-based genre similarity) ----------
       const softLinks: Link[] = [];
