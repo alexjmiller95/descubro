@@ -9,15 +9,14 @@ import type { SimulationNodeDatum } from "d3";
    ============================================================ */
 
 export interface ArtistRecord extends SimulationNodeDatum {
-  id: string; // this will be Artist.artist_id (Spotify ID)
+  id: string; // Artist.artist_id (Spotify ID)
   name: string;
   genre: string[];
   image: string | null;
   spotify: string | null;
 }
 
-export interface Link
-  extends d3.SimulationLinkDatum<ArtistRecord> {
+export interface Link extends d3.SimulationLinkDatum<ArtistRecord> {
   source: string | ArtistRecord;
   target: string | ArtistRecord;
   sourceId: string;
@@ -30,16 +29,13 @@ export interface Link
    CONSTANTS
    ============================================================ */
 
-const NODE_RADIUS = 20; // 50% smaller
-const LINE_WIDTH = 2; // thicker lines than before
+const NODE_RADIUS = 20;
+const LINE_WIDTH = 2;
 const GENRE_FALLBACK_COLOR = "#888888";
 const SOFT_LINK_COLOR = "#888888";
 
 const ARTIST_API =
   "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/Artist?limit=2000";
-
-const ARTIST_CONNECTION_API =
-  "https://alexjmiller95.bubbleapps.io/version-test/api/1.1/obj/ArtistConnection?limit=2000";
 
 type LegendItem = { genre: string; color: string };
 
@@ -74,15 +70,11 @@ export default function Page() {
     (async () => {
       if (!svgRef.current || !minimapRef.current) return;
 
-      // ---------- 1. Fetch Artists + ArtistConnections ----------
+      // ---------- 1. Fetch Artists ----------
       let artistsRaw: any[] = [];
-      let connectionsRaw: any[] = [];
 
       try {
-        const [resArtists, resConnections] = await Promise.all([
-          fetch(ARTIST_API),
-          fetch(ARTIST_CONNECTION_API),
-        ]);
+        const resArtists = await fetch(ARTIST_API);
 
         if (!resArtists.ok) {
           console.error(
@@ -92,26 +84,11 @@ export default function Page() {
           );
           return;
         }
-        if (!resConnections.ok) {
-          console.error(
-            "ArtistConnection API error:",
-            resConnections.status,
-            resConnections.statusText
-          );
-          return;
-        }
 
         const jsonArtists = await resArtists.json();
-        const jsonConnections = await resConnections.json();
-
         artistsRaw = jsonArtists.response?.results ?? [];
-        connectionsRaw = jsonConnections.response?.results ?? [];
 
         console.log("Received Artists:", artistsRaw.length);
-        console.log(
-          "Received ArtistConnections:",
-          connectionsRaw.length
-        );
       } catch (err) {
         console.error("Failed to fetch data from Bubble:", err);
         return;
@@ -122,16 +99,18 @@ export default function Page() {
         return;
       }
 
-      // ---------- 2. Map Bubble Artist objects → nodes ----------
-      const nodes: ArtistRecord[] = artistsRaw.map((a: any) => {
-        // use artist_id (Spotify) as our graph id
+      // ---------- 2. Map Bubble Artist objects → unique nodes ----------
+      const nodeById: Record<string, ArtistRecord> = {};
+
+      artistsRaw.forEach((a: any) => {
         const id: string =
           a.artist_id_text ||
           a.artist_id ||
           a.spotify_id_text ||
           a.spotify_id ||
-          a._id ||
-          String(Math.random());
+          a._id;
+
+        if (!id) return;
 
         const name: string =
           a.name_text || a.name || a.artist_name || "Unknown";
@@ -151,19 +130,32 @@ export default function Page() {
         const spotify: string | null =
           a.spotify_id_text || a.spotify_id || null;
 
-        return {
-          id,
-          name,
-          genre: genreList,
-          image,
-          spotify,
-        };
+        if (!nodeById[id]) {
+          nodeById[id] = {
+            id,
+            name,
+            genre: genreList,
+            image,
+            spotify,
+          };
+        } else {
+          // merge genres + fill any missing data
+          const existing = nodeById[id];
+          const mergedGenres = new Set([
+            ...existing.genre,
+            ...genreList,
+          ]);
+          existing.genre = Array.from(mergedGenres);
+          if (!existing.image && image) existing.image = image;
+          if (!existing.spotify && spotify) existing.spotify = spotify;
+          if (existing.name === "Unknown" && name !== "Unknown") {
+            existing.name = name;
+          }
+        }
       });
 
-      const nodeById: Record<string, ArtistRecord> = {};
-      nodes.forEach((n) => {
-        nodeById[n.id] = n;
-      });
+      const nodes: ArtistRecord[] = Object.values(nodeById);
+      console.log("Unique artist nodes:", nodes.length);
 
       // ---------- 3. Genre palette + positioning ----------
       const primaryGenres = nodes.map((n) =>
@@ -196,83 +188,65 @@ export default function Page() {
         genreCenterX[g] = bandStep * (i + 1);
       });
 
-      // ---------- 4. STRONG links from ArtistConnection ----------
+      // ---------- 4. Build links purely from shared genres ----------
       const links: Link[] = [];
+      const softLinks: Link[] = [];
+
       const strongKey = (a: string, b: string) =>
         a < b ? `${a}__${b}` : `${b}__${a}`;
       const existingStrongKeys = new Set<string>();
 
-      connectionsRaw.forEach((c: any) => {
-        // your new workflow saves these as text fields => *_text
-        const sourceId: string | undefined =
-          c.artist_1_id_text || c.artist_1_id;
-        const targetId: string | undefined =
-          c.artist_2_id_text || c.artist_2_id;
-
-        if (!sourceId || !targetId) return;
-        if (!nodeById[sourceId] || !nodeById[targetId]) return;
-
-        const key = strongKey(sourceId, targetId);
-        if (existingStrongKeys.has(key)) return;
-        existingStrongKeys.add(key);
-
-        const genreValue: string =
-          (Array.isArray(c.genre_list_text) &&
-            c.genre_list_text[0]) ||
-          c.genre_text ||
-          "unknown";
-
-        const strength: number =
-          c.connection_strength_number ?? 1;
-
-        links.push({
-          source: sourceId,
-          target: targetId,
-          sourceId,
-          targetId,
-          genre: String(genreValue).toLowerCase(),
-          strength,
-        });
-      });
-
-      console.log(
-        "Built strong links from ArtistConnection:",
-        links.length
-      );
-
-      // ---------- 5. SOFT links (keyword-based genre similarity) ----------
-      const softLinks: Link[] = [];
-
-      function hasKeywordOverlap(g1: string, g2: string) {
-        const a = g1.toLowerCase().split(/\s+/).filter(Boolean);
-        const b = g2.toLowerCase().split(/\s+/).filter(Boolean);
-        return a.some((word) => b.includes(word));
+      function lowerGenres(arr: string[]) {
+        return arr.map((g) => g.toLowerCase());
       }
 
       for (let i = 0; i < nodes.length; i++) {
+        const a = nodes[i];
+        const g1 = lowerGenres(a.genre);
+
         for (let j = i + 1; j < nodes.length; j++) {
-          const g1 = (nodes[i].genre[0] ?? "").toLowerCase();
-          const g2 = (nodes[j].genre[0] ?? "").toLowerCase();
-          if (!g1 || !g2) continue;
-          if (g1 === g2) continue;
-          if (!hasKeywordOverlap(g1, g2)) continue;
+          const b = nodes[j];
+          const g2 = lowerGenres(b.genre);
 
-          const key = strongKey(nodes[i].id, nodes[j].id);
-          if (existingStrongKeys.has(key)) continue;
+          if (!g1.length || !g2.length) continue;
 
-          softLinks.push({
-            source: nodes[i].id,
-            target: nodes[j].id,
-            sourceId: nodes[i].id,
-            targetId: nodes[j].id,
-            genre: "soft-related",
-          });
+          const overlap = g1.filter((g) => g2.includes(g));
+          if (!overlap.length) continue;
+
+          const key = strongKey(a.id, b.id);
+
+          const primary1 = (g1[0] ?? "unknown").toLowerCase();
+          const primary2 = (g2[0] ?? "unknown").toLowerCase();
+
+          if (primary1 && primary1 === primary2) {
+            if (existingStrongKeys.has(key)) continue;
+            existingStrongKeys.add(key);
+
+            links.push({
+              source: a.id,
+              target: b.id,
+              sourceId: a.id,
+              targetId: b.id,
+              genre: primary1,
+              strength: overlap.length,
+            });
+          } else {
+            softLinks.push({
+              source: a.id,
+              target: b.id,
+              sourceId: a.id,
+              targetId: b.id,
+              genre: "soft-related",
+              strength: overlap.length,
+            });
+          }
         }
       }
 
+      console.log("Built strong genre links:", links.length);
       console.log("Built soft genre links:", softLinks.length);
 
-      // ---------- 6. Setup SVGs ----------
+      // ---------- 5. Setup SVGs ----------
       const svg = d3.select(svgRef.current);
       const minimapSvg = d3.select(minimapRef.current);
       svg.selectAll("*").remove();
@@ -296,7 +270,7 @@ export default function Page() {
       const mainG = svg.append("g");
       const minimapG = minimapSvg.append("g");
 
-      // ---------- 7. Tooltip ----------
+      // ---------- 6. Tooltip ----------
       const tooltip = d3
         .select("body")
         .append("div")
@@ -310,7 +284,7 @@ export default function Page() {
         .style("pointer-events", "none")
         .style("opacity", 0);
 
-      // ---------- 8. Image patterns ----------
+      // ---------- 7. Image patterns ----------
       const defs = mainG.append("defs");
       nodes.forEach((n) => {
         if (!n.image) return;
@@ -329,7 +303,7 @@ export default function Page() {
           .attr("preserveAspectRatio", "xMidYMid slice");
       });
 
-      // ---------- 9. Strong Links ----------
+      // ---------- 8. Strong Links ----------
       const linkSel = mainG
         .append("g")
         .attr("stroke-linecap", "round")
@@ -343,7 +317,7 @@ export default function Page() {
         .attr("stroke", (d) => genreColor[d.genre] ?? GENRE_FALLBACK_COLOR)
         .attr("stroke-opacity", 0.8);
 
-      // ---------- 10. Soft Links (dotted, grey) ----------
+      // ---------- 9. Soft Links (dotted, grey) ----------
       const softLinkSel = mainG
         .append("g")
         .attr("stroke-linecap", "round")
@@ -356,7 +330,7 @@ export default function Page() {
         .attr("stroke-dasharray", "4 4")
         .attr("stroke-opacity", 0.5);
 
-      // ---------- 11. Minimap links ----------
+      // ---------- 10. Minimap links ----------
       const miniLinks = minimapG
         .append("g")
         .selectAll("line")
@@ -378,7 +352,7 @@ export default function Page() {
         .attr("stroke-dasharray", "3 3")
         .attr("stroke-opacity", 0.4);
 
-      // ---------- 12. Nodes ----------
+      // ---------- 11. Nodes ----------
       const nodeSel = mainG
         .append("g")
         .selectAll("circle")
@@ -411,7 +385,7 @@ export default function Page() {
       linkSelRef.current = linkSel;
       softLinkSelRef.current = softLinkSel;
 
-      // ---------- 13. Hover behaviour ----------
+      // ---------- 12. Hover behaviour ----------
       nodeSel
         .on("mouseover", function (event, d) {
           d3.select(this)
@@ -441,7 +415,7 @@ export default function Page() {
           tooltip.style("opacity", 0);
         });
 
-      // ---------- 14. Minimap viewport ----------
+      // ---------- 13. Minimap viewport ----------
       const viewportRect = minimapSvg
         .append("rect")
         .attr("fill", "none")
@@ -497,7 +471,7 @@ export default function Page() {
           .call(zoomBehavior.transform as any, newTransform);
       });
 
-      // ---------- 15. Force simulation ----------
+      // ---------- 14. Force simulation ----------
       const simulation = d3
         .forceSimulation<ArtistRecord>(nodes)
         .force(
@@ -529,46 +503,30 @@ export default function Page() {
         .on("tick", () => {
           linkSel
             .attr("x1", (d) =>
-              typeof d.source !== "string"
-                ? d.source.x ?? 0
-                : 0
+              typeof d.source !== "string" ? d.source.x ?? 0 : 0
             )
             .attr("y1", (d) =>
-              typeof d.source !== "string"
-                ? d.source.y ?? 0
-                : 0
+              typeof d.source !== "string" ? d.source.y ?? 0 : 0
             )
             .attr("x2", (d) =>
-              typeof d.target !== "string"
-                ? d.target.x ?? 0
-                : 0
+              typeof d.target !== "string" ? d.target.x ?? 0 : 0
             )
             .attr("y2", (d) =>
-              typeof d.target !== "string"
-                ? d.target.y ?? 0
-                : 0
+              typeof d.target !== "string" ? d.target.y ?? 0 : 0
             );
 
           softLinkSel
             .attr("x1", (d) =>
-              typeof d.source !== "string"
-                ? d.source.x ?? 0
-                : 0
+              typeof d.source !== "string" ? d.source.x ?? 0 : 0
             )
             .attr("y1", (d) =>
-              typeof d.source !== "string"
-                ? d.source.y ?? 0
-                : 0
+              typeof d.source !== "string" ? d.source.y ?? 0 : 0
             )
             .attr("x2", (d) =>
-              typeof d.target !== "string"
-                ? d.target.x ?? 0
-                : 0
+              typeof d.target !== "string" ? d.target.x ?? 0 : 0
             )
             .attr("y2", (d) =>
-              typeof d.target !== "string"
-                ? d.target.y ?? 0
-                : 0
+              typeof d.target !== "string" ? d.target.y ?? 0 : 0
             );
 
           nodeSel
@@ -624,7 +582,7 @@ export default function Page() {
             .attr("cy", (d) => (d.y ?? 0) * scaleY);
         });
 
-      // ---------- 16. Cleanup ----------
+      // ---------- 15. Cleanup ----------
       destroy = () => {
         tooltip.remove();
         simulation.stop();
@@ -805,8 +763,7 @@ export default function Page() {
                   gap: 8,
                   marginBottom: 6,
                   cursor: "pointer",
-                  opacity:
-                    activeGenre && !active ? 0.4 : 1,
+                  opacity: activeGenre && !active ? 0.4 : 1,
                 }}
               >
                 <div
